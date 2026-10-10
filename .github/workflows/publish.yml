@@ -12,6 +12,8 @@ on:
         required: true
       CLOUDFLARE_ACCOUNT_ID:
         required: true
+      RELEASES_GITHUB_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       tag:
@@ -176,10 +178,15 @@ jobs:
           npm run deploy:production
       - name: Check production protocol endpoint
         run: python3 scripts/check-relay.py https://herdr-relay.hackerchai.com
-      - name: Publish update readiness manifest after all release gates pass
+      - name: Prepare update readiness manifest after all release gates pass
+        run: python3 scripts/update-manifest.py
+      - name: Publish the public binary channel
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_GITHUB_TOKEN }}
+        run: python3 scripts/publish-public-release.py
+      - name: Publish private update readiness manifest
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
-          python3 scripts/update-manifest.py
           gh release upload "$TAG" target/packages/herdr-relay-update.json --clobber

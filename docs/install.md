@@ -1,6 +1,7 @@
 # Install Herdr Relay
 
-Public distribution uses crates.io; GitHub binary archives remain private.
+Download native archives from the [public releases](https://github.com/hackerchai/herdr-relay-releases/releases/latest)
+without a GitHub login, or install from crates.io.
 Install a published CLI release with Rust 1.99 or newer:
 
 ```sh
@@ -20,12 +21,13 @@ artifact, not proof that its platform acceptance passed. Check the validation
 records for the actual tested runtime. No minimum OS/distribution support claim
 is made solely from successful compilation.
 
+Replace `VERSION` below with the downloaded release version.
 Check the `.tar.gz` against its adjacent checksum from the same trusted source:
 
 ```sh
-shasum -a 256 -c herdr-relay-0.1.1-aarch64-apple-darwin.tar.gz.sha256
-tar -xzf herdr-relay-0.1.1-aarch64-apple-darwin.tar.gz
-cd herdr-relay-0.1.1-aarch64-apple-darwin
+shasum -a 256 -c herdr-relay-VERSION-aarch64-apple-darwin.tar.gz.sha256
+tar -xzf herdr-relay-VERSION-aarch64-apple-darwin.tar.gz
+cd herdr-relay-VERSION-aarch64-apple-darwin
 ./install.sh
 ```
 
@@ -50,8 +52,9 @@ installs a complete stable GitHub Release for the running executable's OS and
 architecture (including x86_64 under Rosetta). The updater preserves a previous
 binary for recovery, updates the service copy, and keeps stopped services stopped.
 An active session defers the service update until stop/start; add
-`--restart-service` to explicitly restart immediately. Private GitHub assets need
-the caller's own repository access via `gh auth login` or `GH_TOKEN`.
+`--restart-service` to explicitly restart immediately. The default public channel
+needs no GitHub login. An explicit `--repository OWNER/REPO` can select another
+channel; private alternatives use the caller's own `gh auth login` or `GH_TOKEN`.
 The public source-install alternative is `cargo install herdr-relay --locked --force`.
 Externally managed installations must be upgraded using their package manager.
 

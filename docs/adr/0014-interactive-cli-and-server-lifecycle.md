@@ -25,10 +25,9 @@ policy on Linux; it does not add a macOS system daemon or start Herdr itself.
 Service managers use an explicit unattended command so changing CLI defaults
 cannot accidentally open a TUI from launchd or systemd.
 
-GitHub remains private and crates.io remains public, as already authorized in
-ADR-0013. The updater uses the caller's own GitHub credentials for private assets;
-an explicit alternate release repository supports a later approved public binary
-channel. No maintainer credential is embedded. A readiness manifest is published
+The original private update-channel decision is superseded by
+[ADR-0015](0015-public-binary-release-channel.md), following explicit maintainer
+approval of a separate public distribution repository. A readiness manifest is published
 only after all four native archives, crates.io publication, and production
 deployment succeed. The CLI and copied service executable are upgraded together;
 active sessions defer server activation unless an immediate restart is requested.
