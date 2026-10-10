@@ -1,5 +1,14 @@
 import { isHex } from './protocol.ts';
-import { MAX_WINDOW, WINDOW, burstOf, quotas, type Flow, type Limits } from './limits.ts';
+import {
+  MAX_WINDOW,
+  WINDOW,
+  burstOf,
+  quotas,
+  rowLimits,
+  windowOf,
+  type Flow,
+  type Limits,
+} from './limits.ts';
 
 export interface RestoredChannel {
   id: string;
@@ -15,13 +24,8 @@ export interface RestoredChannel {
   /** Zero for a legacy channel; otherwise the negotiated stream v2 window. */
   window?: number;
 }
-function rowLimits(row: RestoredChannel): Limits {
-  return row.window
-    ? { bytes_per_second: row.rate, window: row.window }
-    : { bytes_per_second: row.rate };
-}
 function flowValid(value: unknown, limits: Limits): value is Flow {
-  const window = limits.window ?? WINDOW;
+  const window = windowOf(limits);
   if (!value || typeof value !== 'object') return false;
   const f = value as Flow;
   const offset = (n: unknown) =>
@@ -112,7 +116,7 @@ export function restoredChannelValid(
         [pairs[1], pairs[0]],
       ]) {
         const outstanding = BigInt(a.flow.sent) - BigInt(b.flow.ack);
-        if (outstanding < 0n || outstanding > BigInt(limits.window ?? WINDOW)) return false;
+        if (outstanding < 0n || outstanding > BigInt(windowOf(limits))) return false;
       }
     }
     return true;

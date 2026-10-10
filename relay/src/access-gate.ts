@@ -20,6 +20,13 @@ export class AccessGate extends DurableObject<Env> {
     ctx.storage.sql.exec(
       'CREATE TABLE IF NOT EXISTS challenges (nonce TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL)',
     );
+    if (
+      !ctx.storage.sql
+        .exec<{ name: string }>('PRAGMA table_info(challenges)')
+        .toArray()
+        .some((c) => c.name === 'prepared')
+    )
+      ctx.storage.sql.exec('ALTER TABLE challenges ADD COLUMN prepared INTEGER NOT NULL DEFAULT 0');
     ctx.storage.sql.exec(
       'CREATE TABLE IF NOT EXISTS rate (id INTEGER PRIMARY KEY CHECK(id=1), start INTEGER NOT NULL, count INTEGER NOT NULL)',
     );
@@ -39,7 +46,9 @@ export class AccessGate extends DurableObject<Env> {
     });
     await this.arm(now + 60000);
   }
-  async issue(input: unknown): Promise<Challenge> {
+  /** `prepared` challenges are issued in advance for joins and use their own
+   *  small pool, so unredeemed ones never block a device's fresh requests. */
+  async issue(input: unknown, prepared = false): Promise<Challenge> {
     const r = record(input, [
       'version',
       'origin',
@@ -66,14 +75,17 @@ export class AccessGate extends DurableObject<Env> {
       this.ctx.storage.transactionSync(() => {
         this.ctx.storage.sql.exec('DELETE FROM challenges WHERE expires<=?', now);
         const { count } = this.ctx.storage.sql
-          .exec<{ count: number }>('SELECT COUNT(*) AS count FROM challenges')
+          .exec<{
+            count: number;
+          }>('SELECT COUNT(*) AS count FROM challenges WHERE prepared=?', prepared ? 1 : 0)
           .one();
-        if (count >= 4) throw new ProtocolError('RATE_LIMITED', 429);
+        if (count >= (prepared ? 8 : 4)) throw new ProtocolError('RATE_LIMITED', 429);
         this.ctx.storage.sql.exec(
-          'INSERT INTO challenges VALUES (?,?,?)',
+          'INSERT INTO challenges (nonce,value,expires,prepared) VALUES (?,?,?,?)',
           c.nonce,
           JSON.stringify(c),
           now + 60,
+          prepared ? 1 : 0,
         );
       });
     } catch (error) {

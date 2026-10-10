@@ -9,13 +9,13 @@ const device = 'a'.repeat(64),
   channel = 'd'.repeat(32),
   reservation = 'e'.repeat(32);
 
-function setup(features: string[] | undefined) {
+function setup(features: string[] | undefined, expires = Date.now() + 600000) {
   const socket = new TestSocket({
     kind: 'control',
     device,
     boot,
     ready: true,
-    expires: Date.now() + 600000,
+    expires,
     ...(features ? { features } : {}),
   });
   const ctx = platform([socket]);
@@ -84,4 +84,13 @@ test('a publisher that did not negotiate the capability keeps the legacy control
   await ctx.drain();
   assert.deepEqual(admitted, []);
   assert.equal(socket.readyState, WebSocket.CLOSED);
+});
+
+test('a publisher whose admission lease expired cannot acknowledge a channel', async () => {
+  const { socket, ctx, relay, admitted } = setup(['control-authenticated'], Date.now() + 1000);
+  socket.attachment.expires = Date.now() - 1;
+  await relay.webSocketMessage(socket as unknown as WebSocket, authenticated(channel));
+  await ctx.drain();
+  assert.deepEqual(admitted, []);
+  assert.ok(!socket.sent.some((m) => JSON.parse(m).type === 'authenticated'));
 });

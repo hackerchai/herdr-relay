@@ -182,3 +182,38 @@ test('a connector without the capability receives the legacy access response', a
   assert.equal('join_challenge' in opened, false);
   assert.deepEqual(issued, []);
 });
+
+test('unredeemed pre-issued challenges cannot block a device from fresh challenges', async () => {
+  const { AccessGate } = await import('../src/access-gate.ts');
+  const { bytes } = await import('../src/protocol.ts');
+  const key = '2'.repeat(64);
+  const device = await digest(bytes('302a300506032b6570032100' + key));
+  const ctx = platform();
+  const env = {
+    RELAY_ORIGIN: 'https://relay.example',
+    ADMISSION: {
+      getByName: () => ({
+        async hold() {
+          return { expires: Date.now() + 60000 };
+        },
+        async release() {},
+      }),
+    },
+  };
+  const gate = new AccessGate(ctx, env);
+  const request = (path: string) => ({
+    version: 1,
+    origin: 'https://relay.example',
+    method: 'GET',
+    path,
+    device_id: device,
+    public_key: key,
+    payload_sha256: '3'.repeat(64),
+  });
+  const join = (n: number) =>
+    request(`/v1/devices/${device}/channels/${String(n).padStart(32, '0')}/publisher`);
+  for (let n = 0; n < 8; n++) await gate.issue(join(n), true);
+  await assert.rejects(gate.issue(join(8), true), /RATE_LIMITED/);
+  for (let n = 0; n < 4; n++) await gate.issue(request(`/v1/devices/${device}/control`));
+  await assert.rejects(gate.issue(request(`/v1/devices/${device}/control`)), /RATE_LIMITED/);
+});

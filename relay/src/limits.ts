@@ -15,6 +15,12 @@ export interface Limits {
 export function windowOf(limits: Limits): number {
   return limits.window ?? WINDOW;
 }
+/** Limits stored with a channel row; a zero or absent window means legacy. */
+export function rowLimits(row: { rate: number; window?: number }): Limits {
+  return row.window
+    ? { bytes_per_second: row.rate, window: row.window }
+    : { bytes_per_second: row.rate };
+}
 /** Both endpoints of a channel must receive the same limits. */
 export function channelLimits(stream: Required<Limits>, v2: boolean): Limits {
   return v2

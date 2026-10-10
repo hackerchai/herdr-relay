@@ -13,8 +13,10 @@ import {
 import { decodeFrame } from './frame.ts';
 import {
   acceptFrame,
+  MAX_WINDOW,
   channelLimits,
   initialFlow,
+  rowLimits,
   quotas,
   type Flow,
   type Limits,
@@ -278,17 +280,26 @@ export class DeviceRelay extends DurableObject<Env> {
       this.endControl(ws, host.boot);
       return;
     }
+    let reply: Record<string, unknown>;
     try {
-      await this.authenticate(host, host.boot, channel);
-      ws.send(JSON.stringify({ type: 'authenticated', channel_id: channel }));
+      // The same lease and readiness checks as the HTTP acknowledgement.
+      await this.expire();
+      const current = ws.deserializeAttachment() as Control | null;
+      if (this.control() !== ws || !current?.ready || current.expires <= Date.now())
+        throw new ProtocolError('HOST_OFFLINE', 409);
+      await this.authenticate(current, current.boot, channel);
+      reply = { type: 'authenticated', channel_id: channel };
     } catch (error) {
-      ws.send(
-        JSON.stringify({
-          type: 'authentication_failed',
-          channel_id: channel,
-          code: error instanceof ProtocolError ? error.code : 'RELAY_BUSY',
-        }),
-      );
+      reply = {
+        type: 'authentication_failed',
+        channel_id: channel,
+        code: error instanceof ProtocolError ? error.code : 'RELAY_BUSY',
+      };
+    }
+    try {
+      ws.send(JSON.stringify(reply));
+    } catch {
+      /* the control connection already ended */
     }
   }
   private async publish(request: Request, device: string, publisher: string): Promise<Response> {
@@ -634,6 +645,7 @@ export class DeviceRelay extends DurableObject<Env> {
           channel,
           row.reservation,
         );
+        this.expiries.set(channel + ':' + row.reservation, expires);
         await this.arm();
       }
       for (const ws of peers) {
@@ -766,7 +778,7 @@ export class DeviceRelay extends DurableObject<Env> {
       0,
       ...sockets.map((ws) => {
         const n = (ws.deserializeAttachment() as Pair).flow?.peak;
-        return Number.isInteger(n) && n >= 0 && n <= 65536 ? n : 0;
+        return Number.isInteger(n) && n >= 0 && n <= MAX_WINDOW ? n : 0;
       }),
     );
     if (peak)
@@ -1137,6 +1149,7 @@ export class DeviceRelay extends DurableObject<Env> {
         row.id,
         row.reservation,
       );
+      this.expiries.set(row.id + ':' + row.reservation, expires);
     }
     await this.arm();
   }
@@ -1219,15 +1232,18 @@ export async function prepareJoin(
   ticket: string,
 ): Promise<Record<string, unknown> | undefined> {
   try {
-    return (await env.AUTH.getByName('device:' + device).issue({
-      version: 1,
-      origin: env.RELAY_ORIGIN,
-      method: 'GET',
-      path,
-      device_id: device,
-      public_key: publicKey,
-      payload_sha256: await digest(ticket),
-    })) as unknown as Record<string, unknown>;
+    return (await env.AUTH.getByName('device:' + device).issue(
+      {
+        version: 1,
+        origin: env.RELAY_ORIGIN,
+        method: 'GET',
+        path,
+        device_id: device,
+        public_key: publicKey,
+        payload_sha256: await digest(ticket),
+      },
+      true,
+    )) as unknown as Record<string, unknown>;
   } catch {
     return undefined;
   }
@@ -1241,9 +1257,4 @@ export function features(request: Request): Set<string> {
       .filter((f) => /^[a-z0-9-]{1,32}$/.test(f))
       .slice(0, 16),
   );
-}
-function rowLimits(row: Channel): Limits {
-  return row.window
-    ? { bytes_per_second: row.rate, window: row.window }
-    : { bytes_per_second: row.rate };
 }
