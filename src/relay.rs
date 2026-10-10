@@ -41,6 +41,8 @@ pub struct Relay {
     control_acks: Arc<std::sync::Mutex<Option<ControlAcks>>>,
     /// How the latest channel to each host was established.
     routes: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::direct::Route>>>,
+    /// Channel ids offered to the relay, which may need relay-side release.
+    relay_channels: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +151,7 @@ impl Relay {
             pending: Arc::new(tokio::sync::Semaphore::new(4)),
             control_acks: Default::default(),
             routes: Default::default(),
+            relay_channels: Default::default(),
         })
     }
     pub(crate) fn check_identity(&self) -> Result<()> {
@@ -540,6 +543,13 @@ impl Relay {
             .get(publisher)
             .copied()
     }
+    /// Whether this channel id was offered to the relay by this process.
+    pub fn opened_at_relay(&self, channel: &str) -> bool {
+        self.relay_channels
+            .lock()
+            .expect("channel state poisoned")
+            .contains(channel)
+    }
     pub(crate) fn revocations(&self) -> tokio::sync::watch::Receiver<u64> {
         self.revocations.subscribe()
     }
@@ -599,6 +609,10 @@ impl Relay {
         target: Option<&str>,
         channel: &str,
     ) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
+        self.relay_channels
+            .lock()
+            .expect("channel state poisoned")
+            .insert(channel.to_owned());
         let grant = host::grant(&self.profile, &self.origin, publisher, false)?;
         let purpose = if target.is_some() {
             Purpose::Attach

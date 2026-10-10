@@ -158,3 +158,33 @@ async fn an_older_client_still_lists_targets_from_a_new_host() {
     drop(stream);
     task.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn only_name_derived_aliases_follow_a_hostname_change() {
+    let fixture = Fixture::new();
+    let profile = fixture.client();
+    names::remember(
+        &profile,
+        ORIGIN,
+        "h1",
+        Some("MacBook"),
+        Some("MacBook (work)"),
+    )
+    .unwrap();
+    names::refresh_host(&profile, ORIGIN, "h1", "mbp-2").unwrap();
+    assert_eq!(
+        names::remember(&profile, ORIGIN, "h1", None, None)
+            .unwrap()
+            .alias,
+        "MacBook (work)"
+    );
+    names::remember(&profile, ORIGIN, "h2", Some("box"), None).unwrap();
+    names::remember(&profile, ORIGIN, "h3", Some("box"), None).unwrap(); // alias "box (2)"
+    names::refresh_host(&profile, ORIGIN, "h3", "box-renamed").unwrap();
+    assert_eq!(
+        names::remember(&profile, ORIGIN, "h3", None, None)
+            .unwrap()
+            .alias,
+        "box-renamed"
+    );
+}

@@ -337,24 +337,26 @@ pub async fn connect_to(
             (*address, stream)
         })
         .collect();
-    let (address, stream) = loop {
-        match attempts.next().await {
-            Some((address, Ok(Ok(stream)))) => break (address, stream),
+    // A TCP answer may come from another service or device reusing the same
+    // numbering; a failed handshake moves on to the remaining candidates.
+    loop {
+        let (address, stream) = match attempts.next().await {
+            Some((address, Ok(Ok(stream)))) => (address, stream),
             Some(_) => continue,
             None => return Err(unreachable()),
+        };
+        crate::timing::mark("direct_tcp");
+        configure(&stream);
+        let stream: Box<dyn crate::relay::Transport> = Box::new(stream);
+        if let Ok(Ok(stream)) = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            crate::secure::connect(stream, &identity, &certificate, &context),
+        )
+        .await
+        {
+            return Ok(Connected { stream, address });
         }
-    };
-    drop(attempts);
-    crate::timing::mark("direct_tcp");
-    configure(&stream);
-    let stream: Box<dyn crate::relay::Transport> = Box::new(stream);
-    let stream = tokio::time::timeout(
-        HANDSHAKE_TIMEOUT,
-        crate::secure::connect(stream, &identity, &certificate, &context),
-    )
-    .await
-    .map_err(|_| unreachable())??;
-    Ok(Connected { stream, address })
+    }
 }
 
 /// Try the endpoint's addresses that are plausibly reachable from here.
@@ -434,6 +436,27 @@ struct Cached {
 pub const RETRY_AFTER_FAILURE: u64 = 600;
 const CACHE: &str = "direct-endpoints.json";
 
+/// Serialize read-modify-write cycles of the cache across processes.
+fn locked<T>(profile: &Path, update: impl FnOnce() -> Result<T>) -> Result<T> {
+    use std::os::unix::{fs::OpenOptionsExt, io::AsRawFd};
+    crate::identity::private_directory(profile, false)?;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(profile.join("direct-endpoints.lock"))
+        .map_err(|e| Error::new("DIRECT_CACHE", e.to_string()))?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(Error::new(
+            "DIRECT_CACHE",
+            std::io::Error::last_os_error().to_string(),
+        ));
+    }
+    update()
+}
+
 fn read_cache(profile: &Path) -> Vec<Cached> {
     use std::{
         io::Read,
@@ -464,36 +487,45 @@ pub fn remember(profile: &Path, origin: &str, identity: &str, endpoint: &Endpoin
     if !endpoint.valid() {
         return Err(Error::new("PROTOCOL_ERROR", "invalid direct endpoint"));
     }
-    crate::identity::private_directory(profile, false)?;
-    let mut records = read_cache(profile);
-    // A changed endpoint deserves a fresh attempt; an unchanged one keeps its back-off.
-    let retry_after = records
-        .iter()
-        .find(|r| r.origin == origin && r.identity == identity && &r.endpoint == endpoint)
-        .map_or(0, |r| r.retry_after);
-    records.retain(|r| !(r.origin == origin && r.identity == identity));
-    records.push(Cached {
-        origin: origin.to_owned(),
-        identity: identity.to_owned(),
-        endpoint: endpoint.clone(),
-        retry_after,
-    });
-    if records.len() > 256 {
-        records.remove(0);
-    }
-    write_cache(profile, &records)
+    locked(profile, || {
+        let mut records = read_cache(profile);
+        if records
+            .iter()
+            .any(|r| r.origin == origin && r.identity == identity && &r.endpoint == endpoint)
+        {
+            return Ok(());
+        }
+        // A changed endpoint deserves a fresh attempt; an unchanged one keeps its back-off.
+        let retry_after = records
+            .iter()
+            .find(|r| r.origin == origin && r.identity == identity && &r.endpoint == endpoint)
+            .map_or(0, |r| r.retry_after);
+        records.retain(|r| !(r.origin == origin && r.identity == identity));
+        records.push(Cached {
+            origin: origin.to_owned(),
+            identity: identity.to_owned(),
+            endpoint: endpoint.clone(),
+            retry_after,
+        });
+        if records.len() > 256 {
+            records.remove(0);
+        }
+        write_cache(profile, &records)
+    })
 }
 /// Skip direct attempts to this host for a while after a failure.
 pub fn back_off(profile: &Path, origin: &str, identity: &str) {
-    let mut records = read_cache(profile);
-    let Some(record) = records
-        .iter_mut()
-        .find(|r| r.origin == origin && r.identity == identity)
-    else {
-        return;
-    };
-    record.retry_after = crate::pairing::now() + RETRY_AFTER_FAILURE;
-    let _ = write_cache(profile, &records);
+    let _ = locked(profile, || {
+        let mut records = read_cache(profile);
+        let Some(record) = records
+            .iter_mut()
+            .find(|r| r.origin == origin && r.identity == identity)
+        else {
+            return Ok(());
+        };
+        record.retry_after = crate::pairing::now() + RETRY_AFTER_FAILURE;
+        write_cache(profile, &records)
+    });
 }
 fn write_cache(profile: &Path, records: &[Cached]) -> Result<()> {
     use std::{io::Write, os::unix::fs::PermissionsExt};
@@ -512,12 +544,14 @@ fn write_cache(profile: &Path, records: &[Cached]) -> Result<()> {
 }
 /// Drop a cached endpoint the host no longer advertises.
 pub fn forget(profile: &Path, origin: &str, identity: &str) {
-    let mut records = read_cache(profile);
-    let before = records.len();
-    records.retain(|r| !(r.origin == origin && r.identity == identity));
-    if records.len() != before {
-        let _ = write_cache(profile, &records);
+    if recall(profile, origin, identity).is_none() {
+        return;
     }
+    let _ = locked(profile, || {
+        let mut records = read_cache(profile);
+        records.retain(|r| !(r.origin == origin && r.identity == identity));
+        write_cache(profile, &records)
+    });
 }
 /// The cached endpoint, if any.
 pub fn recall(profile: &Path, origin: &str, identity: &str) -> Option<Endpoint> {

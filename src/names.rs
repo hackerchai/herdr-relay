@@ -187,9 +187,14 @@ pub fn refresh_host(profile: &Path, origin: &str, identity: &str, hostname: &str
     let current = read(profile, HOSTS)?
         .into_iter()
         .find(|r| r.origin == origin && r.identity == identity);
-    let automatic = current
-        .as_ref()
-        .is_none_or(|r| r.alias == r.name || r.alias.starts_with(&format!("{} (", r.name)));
+    // Only the name itself or its de-duplicated "name (N)" form is automatic.
+    let automatic = current.as_ref().is_none_or(|r| {
+        r.alias == r.name
+            || r.alias
+                .strip_prefix(&format!("{} (", r.name))
+                .and_then(|rest| rest.strip_suffix(')'))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    });
     if current.as_ref().is_some_and(|r| r.name == hostname) {
         return Ok(());
     }
@@ -206,6 +211,9 @@ pub fn refresh_host(profile: &Path, origin: &str, identity: &str, hostname: &str
 
 /// Record the hostname a paired client reported to this host.
 pub fn remember_peer(profile: &Path, origin: &str, identity: &str, hostname: &str) -> Result<()> {
+    if peer_name(profile, origin, identity).as_deref() == Some(hostname) {
+        return Ok(());
+    }
     remember_in(profile, PEERS, origin, identity, Some(hostname), Some("")).map(|_| ())
 }
 pub fn peer_name(profile: &Path, origin: &str, identity: &str) -> Option<String> {

@@ -1,3 +1,4 @@
+mod common;
 use herdr_relay::{identity::Identity, relay::Relay, retry::Backoff, service};
 use std::{os::unix::fs::PermissionsExt, time::Duration};
 use tokio::{
@@ -123,4 +124,22 @@ async fn endpoints_advertise_their_stream_capabilities_to_the_relay() {
         request.contains("\r\nx-relay-features: stream-v2"),
         "{request}"
     );
+}
+
+#[tokio::test]
+async fn only_channels_offered_to_the_relay_need_relay_cleanup() {
+    let fixture = common::Fixture::new();
+    let (address, gateway) = failed_gateway(503, r#"{"code":"RELAY_BUSY"}"#.into(), 1).await;
+    let relay = Relay::new(&fixture.client(), common::ORIGIN, Some(&address)).unwrap();
+    let offered = "ab".repeat(16);
+    assert!(
+        relay
+            .prepare_attach(&fixture.a.id, &fixture.target.id, &offered)
+            .await
+            .is_err()
+    );
+    gateway.await.unwrap();
+    // The relay may have recorded this channel before its answer was lost.
+    assert!(relay.opened_at_relay(&offered));
+    assert!(!relay.opened_at_relay(&"01".repeat(16)));
 }

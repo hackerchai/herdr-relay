@@ -354,3 +354,29 @@ async fn a_reachable_first_candidate_is_used_without_opening_the_others() {
         "a later candidate was opened although the first one answered"
     );
 }
+
+#[tokio::test]
+async fn a_candidate_that_accepts_tcp_but_is_not_the_host_does_not_end_the_direct_attempt() {
+    let fixture = Fixture::new();
+    let (endpoint, _revocations, _task) = host(&fixture).await;
+    // Some other service answers TCP on the first address and closes.
+    let impostor = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let impostor_address = impostor.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = impostor.accept().await {
+            drop(socket);
+        }
+    });
+    let connected = direct::connect_to(
+        &[impostor_address, addresses(&endpoint)[0]],
+        &fixture.client(),
+        ORIGIN,
+        &fixture.a.id,
+        &endpoint.listener_id,
+        Purpose::Control,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(connected.address, addresses(&endpoint)[0]);
+}

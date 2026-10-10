@@ -220,7 +220,9 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
 }
 
 /// Serve one authorized channel. `authenticated` reports successful mutual
-/// authentication to the relay; the native stream starts only after it succeeds.
+/// authentication to the relay (a quota signal, not authorization, which the
+/// endpoints already established). Native bytes start only after it succeeds;
+/// a listing is complete once delivered to the authenticated client.
 pub async fn serve_after_auth<S, F, Fut>(
     stream: S,
     profile: &Path,
