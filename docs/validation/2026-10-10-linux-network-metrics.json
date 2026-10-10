@@ -1,0 +1,121 @@
+{
+  "scope": "controlled manual Linux connector network faults through a loopback fault injector and verified TLS to the development Worker",
+  "results": {
+    "aarch64": {
+      "arch": "aarch64",
+      "origin": "https://herdr-relay-development.hackerchai.workers.dev",
+      "scenarios": [
+        {
+          "scenario": "cloud_proxy_native_ready",
+          "verified_tls_upstream": true
+        },
+        {
+          "scenario": "repeated_connector_refusal",
+          "offline_input_replayed": false,
+          "disconnections": 4
+        },
+        {
+          "scenario": "half_open",
+          "detected_seconds": 29.888,
+          "offline_input_replayed": false
+        },
+        {
+          "scenario": "normal_detach",
+          "exit": 0,
+          "termios_restored": true
+        },
+        {
+          "scenario": "old_connector_after_new_holder",
+          "old_exit": 1,
+          "error": "TARGET_BUSY",
+          "new_holder_survived": true,
+          "termios_restored": true
+        },
+        {
+          "scenario": "revoke_during_reconnect",
+          "old_exit": 1,
+          "fresh_pair_restores_access": true,
+          "termios_restored": true
+        },
+        {
+          "scenario": "cancel_offline",
+          "exit": 130,
+          "termios_restored": true
+        }
+      ],
+      "binary_sha256": "0e3a40c224e4b60edf91e184bab007b9eecb818d38dda464c2db8ab643ed2ce2",
+      "kernel": "Linux 6.8.0-117-generic aarch64",
+      "passed": true,
+      "native_version": "herdr 0.9.3",
+      "native_sha256": "4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0",
+      "deployment": {
+        "id": "5033c032-db1c-4728-b3c7-aa6ed3ae1232",
+        "created_on": "2026-10-09T23:19:47.871084Z",
+        "versions": [
+          {
+            "version_id": "40b9997a-f39f-4101-85c6-6a0404831bc8",
+            "percentage": 100
+          }
+        ]
+      }
+    },
+    "x86_64": {
+      "arch": "x86_64",
+      "origin": "https://herdr-relay-development.hackerchai.workers.dev",
+      "scenarios": [
+        {
+          "scenario": "cloud_proxy_native_ready",
+          "verified_tls_upstream": true
+        },
+        {
+          "scenario": "repeated_connector_refusal",
+          "offline_input_replayed": false,
+          "disconnections": 4
+        },
+        {
+          "scenario": "half_open",
+          "detected_seconds": 29.919,
+          "offline_input_replayed": false
+        },
+        {
+          "scenario": "normal_detach",
+          "exit": 0,
+          "termios_restored": true
+        },
+        {
+          "scenario": "old_connector_after_new_holder",
+          "old_exit": 1,
+          "error": "TARGET_BUSY",
+          "new_holder_survived": true,
+          "termios_restored": true
+        },
+        {
+          "scenario": "revoke_during_reconnect",
+          "old_exit": 1,
+          "fresh_pair_restores_access": true,
+          "termios_restored": true
+        },
+        {
+          "scenario": "cancel_offline",
+          "exit": 130,
+          "termios_restored": true
+        }
+      ],
+      "binary_sha256": "06361dfde3c9867930b4a34c62d345b74e03731f23bfd2b41ec902e4115d5f77",
+      "kernel": "Linux 6.8.0-117-generic x86_64",
+      "passed": true,
+      "native_version": "herdr 0.9.3",
+      "native_sha256": "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7",
+      "deployment": {
+        "id": "5033c032-db1c-4728-b3c7-aa6ed3ae1232",
+        "created_on": "2026-10-09T23:19:47.871084Z",
+        "versions": [
+          {
+            "version_id": "40b9997a-f39f-4101-85c6-6a0404831bc8",
+            "percentage": 100
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "herdr-relay-development",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-09",
+  "workers_dev": true,
+  "vars": {
+    "RELAY_ORIGIN": "https://relay.local.invalid",
+    "ADMISSION_ENABLED": "true",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUTH",
+        "class_name": "AccessGate",
+      },
+      {
+        "name": "DEVICES",
+        "class_name": "DeviceRelay",
+      },
+      {
+        "name": "ROOMS",
+        "class_name": "Room",
+      },
+      {
+        "name": "ADMISSION",
+        "class_name": "Admission",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AccessGate", "DeviceRelay"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["Room"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["Admission"],
+    },
+  ],
+  "observability": {
+    "enabled": false,
+  },
+}

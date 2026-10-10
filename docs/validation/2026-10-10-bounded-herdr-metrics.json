@@ -1,0 +1,94 @@
+{
+  "herdr_version": "herdr 0.9.3-custom.relay-control-bound-1",
+  "binary_sha256": "3be99bef29ec60fe6ea6d0bb11381bebb895b2e8ce330af527f974f44ccb9860",
+  "mode": "isolated upstream native endpoint; no Relay or OS clipboard application",
+  "baseline_rss_kib": 22560,
+  "producer_messages": 1600,
+  "payload_bytes_each": 8192,
+  "consumer_max_bytes_per_second": 16384,
+  "duration_seconds": 65.212,
+  "samples": [
+    {
+      "seconds": 0.001,
+      "rss_kib": 22672,
+      "messages_emitted": 0,
+      "consumer_bytes": 130
+    },
+    {
+      "seconds": 5.021,
+      "rss_kib": 26512,
+      "messages_emitted": 182,
+      "consumer_bytes": 77954
+    },
+    {
+      "seconds": 10.021,
+      "rss_kib": 27632,
+      "messages_emitted": 364,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 15.047,
+      "rss_kib": 29792,
+      "messages_emitted": 546,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 20.072,
+      "rss_kib": 29792,
+      "messages_emitted": 730,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 25.094,
+      "rss_kib": 29824,
+      "messages_emitted": 800,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 30.114,
+      "rss_kib": 29824,
+      "messages_emitted": 917,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 35.123,
+      "rss_kib": 29824,
+      "messages_emitted": 1101,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 40.138,
+      "rss_kib": 29824,
+      "messages_emitted": 1286,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 45.165,
+      "rss_kib": 29824,
+      "messages_emitted": 1466,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 50.169,
+      "rss_kib": 29840,
+      "messages_emitted": 1600,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 55.178,
+      "rss_kib": 29840,
+      "messages_emitted": 1600,
+      "consumer_bytes": 118914
+    },
+    {
+      "seconds": 60.185,
+      "rss_kib": 29824,
+      "messages_emitted": 1600,
+      "consumer_bytes": 118914
+    }
+  ],
+  "connection_survived": false,
+  "connection_eof_seconds": 7.95,
+  "fresh_client_usable": true,
+  "peak_rss_kib": 29840
+}

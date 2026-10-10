@@ -1,0 +1,27 @@
+{
+  "name": "herdr-relay-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "dev": "wrangler dev --ip 127.0.0.1",
+    "deploy": "wrangler deploy",
+    "lint": "eslint src test --max-warnings 0",
+    "format:check": "prettier --check src test scripts *.json *.jsonc eslint.config.js",
+    "format": "prettier --write src test scripts *.json *.jsonc eslint.config.js",
+    "deploy:production": "wrangler deploy --config wrangler.production.jsonc"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261009.1",
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "eslint": "10.12.0",
+    "prettier": "3.9.9",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "wrangler": "4.149.0"
+  },
+  "version": "0.0.0",
+  "license": "MIT"
+}

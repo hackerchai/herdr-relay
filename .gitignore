@@ -1,0 +1,10 @@
+/target/
+/relay/dist/
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example
+__pycache__/
+.DS_Store

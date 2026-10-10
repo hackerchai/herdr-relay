@@ -1,0 +1,91 @@
+{
+  "herdr_version": "herdr 0.9.3",
+  "binary_sha256": "5173a3e0ae42d5d1ab7ebfa5d5e6329f7c3d23f8e1a3677c7ce3231da2884157",
+  "mode": "isolated upstream native endpoint; no Relay or OS clipboard application",
+  "baseline_rss_kib": 22352,
+  "producer_messages": 1600,
+  "payload_bytes_each": 8192,
+  "consumer_max_bytes_per_second": 16384,
+  "duration_seconds": 65.053,
+  "samples": [
+    {
+      "seconds": 0.001,
+      "rss_kib": 22416,
+      "messages_emitted": 0,
+      "consumer_bytes": 116
+    },
+    {
+      "seconds": 5.01,
+      "rss_kib": 26096,
+      "messages_emitted": 171,
+      "consumer_bytes": 73844
+    },
+    {
+      "seconds": 10.036,
+      "rss_kib": 28320,
+      "messages_emitted": 344,
+      "consumer_bytes": 151668
+    },
+    {
+      "seconds": 15.047,
+      "rss_kib": 32912,
+      "messages_emitted": 519,
+      "consumer_bytes": 229492
+    },
+    {
+      "seconds": 20.065,
+      "rss_kib": 35120,
+      "messages_emitted": 695,
+      "consumer_bytes": 307316
+    },
+    {
+      "seconds": 25.078,
+      "rss_kib": 36432,
+      "messages_emitted": 800,
+      "consumer_bytes": 385140
+    },
+    {
+      "seconds": 30.106,
+      "rss_kib": 37248,
+      "messages_emitted": 873,
+      "consumer_bytes": 462964
+    },
+    {
+      "seconds": 35.122,
+      "rss_kib": 39376,
+      "messages_emitted": 1045,
+      "consumer_bytes": 540788
+    },
+    {
+      "seconds": 40.148,
+      "rss_kib": 41504,
+      "messages_emitted": 1219,
+      "consumer_bytes": 618612
+    },
+    {
+      "seconds": 45.15,
+      "rss_kib": 43632,
+      "messages_emitted": 1391,
+      "consumer_bytes": 696436
+    },
+    {
+      "seconds": 50.172,
+      "rss_kib": 45792,
+      "messages_emitted": 1568,
+      "consumer_bytes": 774260
+    },
+    {
+      "seconds": 55.19,
+      "rss_kib": 46208,
+      "messages_emitted": 1600,
+      "consumer_bytes": 852084
+    },
+    {
+      "seconds": 60.191,
+      "rss_kib": 46208,
+      "messages_emitted": 1600,
+      "consumer_bytes": 929908
+    }
+  ],
+  "connection_survived": true
+}

@@ -1,0 +1,232 @@
+{
+  "candidate": "0.1.0-dev",
+  "source_manifest_sha256": "ac934bc5eff5f4945c60186ca18bc1e651bd160cc2a1028b0d4d485f365ed0d8",
+  "latency": {
+    "samples": 20,
+    "warmup": 4,
+    "measurement": "key write to reconstructed native ANSI screen; not physical display latency",
+    "p50_seconds": 0.28541947953635827,
+    "p95_seconds": 0.29640129092149436,
+    "min_seconds": 0.27549133298452944,
+    "max_seconds": 0.3034711249638349,
+    "all_seconds": [
+      0.2889036249835044,
+      0.29596670798491687,
+      0.29228550009429455,
+      0.28796983300708234,
+      0.28293416707310826,
+      0.28076962498016655,
+      0.2906246669590473,
+      0.29173116700258106,
+      0.28121191693935543,
+      0.2933737499406561,
+      0.29496329103130847,
+      0.28189629199914634,
+      0.2865122500807047,
+      0.29640129092149436,
+      0.2788693329785019,
+      0.28183724998962134,
+      0.2768471249146387,
+      0.2885013750055805,
+      0.3034711249638349,
+      0.28432670899201185,
+      0.28350837493781,
+      0.27549133298452944,
+      0.2899472080171108,
+      0.29045554203912616
+    ]
+  },
+  "throughput": {
+    "decoded_image_bytes": 2097152,
+    "sha256": "f76d64ba1f33a68b5480e8c65c09764fd53f219676141504e5f932170b085599",
+    "native_output_bytes": 2802693,
+    "elapsed_seconds": 9.548675124999136,
+    "useful_kib_per_second": 214.4800166714422,
+    "terminal_kib_per_second": 286.63713520285336,
+    "measurement": "single 2 MiB raw RGBA image, key trigger through complete native Kitty payload; base64 overhead included only in terminal bytes"
+  },
+  "slow_fast": {
+    "environment": "macOS arm64, local workerd, final release binaries",
+    "baseline_rss_kib": {
+      "publisher": 8512,
+      "slow_relay": 7728,
+      "fast_relay": 7792,
+      "herdr_work": 33024,
+      "workerd": 97632
+    },
+    "samples": [
+      {
+        "seconds": 0.13,
+        "fast_response_seconds": 0.125,
+        "rss_kib": {
+          "publisher": 8544,
+          "slow_relay": 7728,
+          "fast_relay": 7792,
+          "herdr_work": 33024,
+          "workerd": 97632
+        },
+        "slow_publisher_inflight_bytes": [
+          4928
+        ]
+      },
+      {
+        "seconds": 5.43,
+        "fast_response_seconds": 0.144,
+        "rss_kib": {
+          "publisher": 8560,
+          "slow_relay": 7728,
+          "fast_relay": 7792,
+          "herdr_work": 33024,
+          "workerd": 97744
+        },
+        "slow_publisher_inflight_bytes": [
+          37088
+        ]
+      },
+      {
+        "seconds": 10.72,
+        "fast_response_seconds": 0.14,
+        "rss_kib": {
+          "publisher": 8592,
+          "slow_relay": 7728,
+          "fast_relay": 7792,
+          "herdr_work": 33024,
+          "workerd": 97856
+        },
+        "slow_publisher_inflight_bytes": [
+          65536
+        ]
+      },
+      {
+        "seconds": 15.99,
+        "fast_response_seconds": 0.135,
+        "rss_kib": {
+          "publisher": 8688,
+          "slow_relay": 7728,
+          "fast_relay": 7792,
+          "herdr_work": 33024,
+          "workerd": 97904
+        },
+        "slow_publisher_inflight_bytes": [
+          65536
+        ]
+      },
+      {
+        "seconds": 21.27,
+        "fast_response_seconds": 0.135,
+        "rss_kib": {
+          "publisher": 8752,
+          "slow_relay": 7728,
+          "fast_relay": 7792,
+          "herdr_work": 33024,
+          "workerd": 98032
+        },
+        "slow_publisher_inflight_bytes": [
+          65536
+        ]
+      },
+      {
+        "seconds": 26.54,
+        "fast_response_seconds": 0.141,
+        "rss_kib": {
+          "publisher": 8784,
+          "slow_relay": 7728,
+          "fast_relay": 7824,
+          "herdr_work": 33024,
+          "workerd": 98160
+        },
+        "slow_publisher_inflight_bytes": [
+          65536
+        ]
+      },
+      {
+        "seconds": 31.83,
+        "fast_response_seconds": 0.148,
+        "rss_kib": {
+          "publisher": 8816,
+          "slow_relay": 7728,
+          "fast_relay": 7824,
+          "herdr_work": 32992,
+          "workerd": 98288
+        },
+        "slow_publisher_inflight_bytes": []
+      },
+      {
+        "seconds": 37.1,
+        "fast_response_seconds": 0.146,
+        "rss_kib": {
+          "publisher": 8832,
+          "slow_relay": 7728,
+          "fast_relay": 7824,
+          "herdr_work": 32992,
+          "workerd": 98032
+        },
+        "slow_publisher_inflight_bytes": []
+      }
+    ]
+  },
+  "half_open_detection_seconds": 73.05075733398553,
+  "final_terminal_idle": {
+    "paste_bytes": 50444,
+    "paste_sha256": "e75731c6cdf1b7a42c77135f6ec33004c1b668bbe2646918f8409a337d3853ac",
+    "events": [
+      {
+        "resize": [
+          73,
+          23
+        ]
+      },
+      {
+        "resize": [
+          83,
+          33
+        ]
+      },
+      {
+        "paste_begin": true
+      },
+      {
+        "paste_end": true
+      },
+      {
+        "mouse_hex": "1b5b3c303b31393b31374d1b5b3c303b31393b31376d"
+      },
+      {
+        "resize": [
+          105,
+          39
+        ]
+      }
+    ],
+    "clipboard_bytes": 32,
+    "kitty_sequences": 34,
+    "graphics_parameters": [
+      "a=q,t=t,f=32,s=1,v=1,i=1,q=2",
+      "a=t,t=d,f=32,s=240,v=80,i=1272734506,q=2,m=1",
+      "m=1",
+      "m=1",
+      "m=1",
+      "m=1",
+      "m=1",
+      "m=1",
+      "m=1",
+      "m=1",
+      "m=1",
+      "m=1"
+    ],
+    "output_bytes": 133076,
+    "exit": 0,
+    "termios_restored": true,
+    "image_bytes": 76800,
+    "image_sha256": "ba194701c049cfce81440d13e0ff015751b211051bb517da43c3aee1368d7478",
+    "window_utc": [
+      "2026-10-09T23:42:22.611Z",
+      "2026-10-09T23:44:37.630Z"
+    ]
+  },
+  "intel_revoke_after_faults": {
+    "commit_detection_seconds": 0.05411679099779576,
+    "native_reservation_release_after_commit_seconds": 0,
+    "frontend_exit_after_commit_seconds": 23.741872417042032
+  }
+}

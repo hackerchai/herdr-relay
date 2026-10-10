@@ -1,0 +1,135 @@
+{
+  "window_utc": [
+    "2026-10-09T23:12:22Z",
+    "2026-10-09T23:14:37Z"
+  ],
+  "worker_version": "45d361cb-1aad-4faf-96e9-fd313cf758de",
+  "measurement": "v3 idle sample; delayed provider rows; not full account cost",
+  "periodic": [
+    {
+      "class": "DeviceRelay",
+      "sum": {
+        "activeTime": 1123715,
+        "cpuTime": 41011,
+        "duration": 0.14383552,
+        "exceededCpuErrors": 0,
+        "exceededMemoryErrors": 0,
+        "fatalInternalErrors": 0,
+        "inboundWebsocketMsgCount": 0,
+        "outboundWebsocketMsgCount": 51,
+        "rowsRead": 255,
+        "rowsWritten": 23,
+        "subrequests": 0
+      },
+      "max": {
+        "activeWebsocketConnections": 3,
+        "memoryUsageBytes": 2346524
+      }
+    },
+    {
+      "class": "Room",
+      "sum": {
+        "activeTime": 174919,
+        "cpuTime": 3563,
+        "duration": 0.022389632,
+        "exceededCpuErrors": 0,
+        "exceededMemoryErrors": 0,
+        "fatalInternalErrors": 0,
+        "inboundWebsocketMsgCount": 0,
+        "outboundWebsocketMsgCount": 0,
+        "rowsRead": 20,
+        "rowsWritten": 5,
+        "subrequests": 0
+      },
+      "max": {
+        "activeWebsocketConnections": 0,
+        "memoryUsageBytes": 1572876
+      }
+    },
+    {
+      "class": "Admission",
+      "sum": {
+        "activeTime": 645974,
+        "cpuTime": 10350,
+        "duration": 0.082684672,
+        "exceededCpuErrors": 0,
+        "exceededMemoryErrors": 0,
+        "fatalInternalErrors": 0,
+        "inboundWebsocketMsgCount": 0,
+        "outboundWebsocketMsgCount": 0,
+        "rowsRead": 218,
+        "rowsWritten": 34,
+        "subrequests": 0
+      },
+      "max": {
+        "activeWebsocketConnections": 0,
+        "memoryUsageBytes": 1572876
+      }
+    }
+  ],
+  "invocations": [
+    {
+      "class": "Admission",
+      "type": "alarm",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 3
+      }
+    },
+    {
+      "class": "DeviceRelay",
+      "type": "hibernation",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 18
+      }
+    },
+    {
+      "class": "DeviceRelay",
+      "type": "alarm",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 6
+      }
+    },
+    {
+      "class": "AuthGate",
+      "type": "alarm",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 1
+      }
+    },
+    {
+      "class": "AuthGate",
+      "type": "alarm",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 1
+      }
+    },
+    {
+      "class": "Room",
+      "type": "jsrpc",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 6
+      }
+    },
+    {
+      "class": "Admission",
+      "type": "jsrpc",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 12
+      }
+    }
+  ]
+}

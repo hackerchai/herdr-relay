@@ -1,0 +1,176 @@
+{
+  "window_utc": [
+    "2026-10-09T23:42:22Z",
+    "2026-10-09T23:44:37Z"
+  ],
+  "worker_version": "61f4cb6f-e29f-4f80-99cb-653f4a01add8",
+  "source_manifest_sha256": "ac934bc5eff5f4945c60186ca18bc1e651bd160cc2a1028b0d4d485f365ed0d8",
+  "measurement": "final candidate, one publisher and one native attach idle; provider samples exclude account Worker costs",
+  "periodic": [
+    {
+      "class": "AuthGate",
+      "sum": {
+        "activeTime": 33702,
+        "cpuTime": 508,
+        "duration": 0.004313856,
+        "exceededCpuErrors": 0,
+        "exceededMemoryErrors": 0,
+        "fatalInternalErrors": 0,
+        "inboundWebsocketMsgCount": 0,
+        "outboundWebsocketMsgCount": 0,
+        "rowsRead": 4,
+        "rowsWritten": 0,
+        "subrequests": 0
+      },
+      "max": {
+        "activeWebsocketConnections": 0,
+        "memoryUsageBytes": 1836391
+      }
+    },
+    {
+      "class": "DeviceRelay",
+      "sum": {
+        "activeTime": 821831,
+        "cpuTime": 14127,
+        "duration": 0.10519436800000001,
+        "exceededCpuErrors": 0,
+        "exceededMemoryErrors": 0,
+        "fatalInternalErrors": 0,
+        "inboundWebsocketMsgCount": 0,
+        "outboundWebsocketMsgCount": 0,
+        "rowsRead": 100,
+        "rowsWritten": 16,
+        "subrequests": 0
+      },
+      "max": {
+        "activeWebsocketConnections": 3,
+        "memoryUsageBytes": 2334689
+      }
+    },
+    {
+      "class": "AuthGate",
+      "sum": {
+        "activeTime": 31987,
+        "cpuTime": 785,
+        "duration": 0.004094336,
+        "exceededCpuErrors": 0,
+        "exceededMemoryErrors": 0,
+        "fatalInternalErrors": 0,
+        "inboundWebsocketMsgCount": 0,
+        "outboundWebsocketMsgCount": 0,
+        "rowsRead": 4,
+        "rowsWritten": 0,
+        "subrequests": 0
+      },
+      "max": {
+        "activeWebsocketConnections": 0,
+        "memoryUsageBytes": 1572876
+      }
+    },
+    {
+      "class": "Room",
+      "sum": {
+        "activeTime": 144391,
+        "cpuTime": 3906,
+        "duration": 0.018482048,
+        "exceededCpuErrors": 0,
+        "exceededMemoryErrors": 0,
+        "fatalInternalErrors": 0,
+        "inboundWebsocketMsgCount": 0,
+        "outboundWebsocketMsgCount": 0,
+        "rowsRead": 16,
+        "rowsWritten": 4,
+        "subrequests": 0
+      },
+      "max": {
+        "activeWebsocketConnections": 0,
+        "memoryUsageBytes": 1572876
+      }
+    },
+    {
+      "class": "Admission",
+      "sum": {
+        "activeTime": 527554,
+        "cpuTime": 7990,
+        "duration": 0.06752691200000001,
+        "exceededCpuErrors": 0,
+        "exceededMemoryErrors": 0,
+        "fatalInternalErrors": 0,
+        "inboundWebsocketMsgCount": 0,
+        "outboundWebsocketMsgCount": 0,
+        "rowsRead": 178,
+        "rowsWritten": 26,
+        "subrequests": 0
+      },
+      "max": {
+        "activeWebsocketConnections": 0,
+        "memoryUsageBytes": 1572876
+      }
+    }
+  ],
+  "invocations": [
+    {
+      "class": "Admission",
+      "type": "alarm",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 3
+      }
+    },
+    {
+      "class": "DeviceRelay",
+      "type": "hibernation",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 25
+      }
+    },
+    {
+      "class": "DeviceRelay",
+      "type": "alarm",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 5
+      }
+    },
+    {
+      "class": "AuthGate",
+      "type": "alarm",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 1
+      }
+    },
+    {
+      "class": "AuthGate",
+      "type": "alarm",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 1
+      }
+    },
+    {
+      "class": "Room",
+      "type": "jsrpc",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 5
+      }
+    },
+    {
+      "class": "Admission",
+      "type": "jsrpc",
+      "status": "success",
+      "sum": {
+        "errors": 0,
+        "requests": 9
+      }
+    }
+  ]
+}

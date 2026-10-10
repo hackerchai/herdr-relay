@@ -1,0 +1,67 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "herdr-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-09",
+  "workers_dev": false,
+  "vars": {
+    "RELAY_ORIGIN": "https://herdr-relay.hackerchai.com",
+    "ADMISSION_ENABLED": "true",
+    "METADATA_RETENTION_HOURS": "25",
+    "GLOBAL_REQUESTS_PER_MINUTE": "120",
+    "GLOBAL_REQUESTS_PER_DAY": "2000",
+    "GLOBAL_IP_REQUESTS_PER_MINUTE": "60",
+    "GLOBAL_PENDING_REQUESTS": "8",
+    "GLOBAL_CHALLENGES": "32",
+    "GLOBAL_PUBLISHERS": "4",
+    "GLOBAL_CHANNELS": "2",
+    "GLOBAL_PENDING_CHANNELS": "8",
+    "GLOBAL_CHANNEL_SECONDS_PER_DAY": "28800",
+    "GLOBAL_PUBLISHER_SECONDS_PER_DAY": "86400",
+    "OPERATOR_DEVICE_IDS": "2884693590c6dd699802aa628ff5440de79ec1b49189f6b7bbf3c8a45dfd55b7",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUTH",
+        "class_name": "AccessGate",
+      },
+      {
+        "name": "DEVICES",
+        "class_name": "DeviceRelay",
+      },
+      {
+        "name": "ROOMS",
+        "class_name": "Room",
+      },
+      {
+        "name": "ADMISSION",
+        "class_name": "Admission",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AccessGate", "DeviceRelay"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["Room"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["Admission"],
+    },
+  ],
+  "observability": {
+    "enabled": false,
+  },
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "herdr-relay.hackerchai.com",
+      "custom_domain": true,
+    },
+  ],
+}

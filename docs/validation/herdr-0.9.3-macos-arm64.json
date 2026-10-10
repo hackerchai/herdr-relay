@@ -1,0 +1,24 @@
+{
+  "version": "herdr 0.9.3",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "binary_sha256": "5173a3e0ae42d5d1ab7ebfa5d5e6329f7c3d23f8e1a3677c7ce3231da2884157",
+  "checks": {
+    "two_native_clients_bootstrap": true,
+    "passive_attach_preserves_geometry": [
+      40,
+      119
+    ],
+    "focus_moves_geometry_control": [
+      24,
+      79
+    ],
+    "both_clients_input_and_receive_updates": true,
+    "peer_disconnect_restores_survivor_geometry": [
+      40,
+      119
+    ],
+    "disconnect_keeps_server_and_survivor": true,
+    "separate_instance_socket_isolation": true
+  },
+  "created_processes_exited": true
+}
