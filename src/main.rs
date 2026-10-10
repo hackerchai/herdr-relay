@@ -1,0 +1,730 @@
+use clap::{Parser, Subcommand};
+use herdr_relay::{Error, Result, native::NativeTarget};
+use std::path::PathBuf;
+
+const DEFAULT_RELAY_ORIGIN: &str = "https://herdr-relay.hackerchai.com";
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn hosted_origin_is_the_default_and_self_hosting_stays_explicit() {
+        let cli = Cli::try_parse_from(["herdr-relay", "serve", "--relay"]).unwrap();
+        let Action::Serve { origin, .. } = cli.command else {
+            panic!("serve command")
+        };
+        assert_eq!(origin, "https://herdr-relay.hackerchai.com");
+        let cli = Cli::try_parse_from([
+            "herdr-relay",
+            "connect",
+            "--host",
+            "host",
+            "--target",
+            "target",
+            "--origin",
+            "https://example.com",
+        ])
+        .unwrap();
+        let Action::Connect { origin, .. } = cli.command else {
+            panic!("connect command")
+        };
+        assert_eq!(origin, "https://example.com");
+    }
+}
+
+#[derive(Parser)]
+#[command(version, about = "Connect to explicitly selected Herdr instances")]
+struct Cli {
+    /// Private Relay state directory (separate from Herdr configuration).
+    #[arg(long, global = true)]
+    profile: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Action,
+}
+
+#[derive(Subcommand)]
+enum Action {
+    /// Change the Relay trust scope while preserving identity and shared targets.
+    Relay {
+        #[command(subcommand)]
+        action: RelayAction,
+    },
+    /// Manage this profile's background user service (never starts Herdr).
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+    /// Run the foreground device service, optionally publishing an existing Herdr instance.
+    Serve {
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+        /// Also publish this device's pairing service through its Relay origin.
+        #[arg(long)]
+        relay: bool,
+        /// Explicit loopback HTTP transport for local Workers development only.
+        #[arg(long, requires = "relay")]
+        relay_local_url: Option<String>,
+        #[arg(long, conflicts_with = "socket", requires = "relay")]
+        session: Option<String>,
+        #[arg(long, requires = "relay")]
+        socket: Option<PathBuf>,
+        #[arg(long, requires = "session")]
+        herdr_config_dir: Option<PathBuf>,
+        /// Name is sent only inside the device-encrypted channel.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List shared targets and their encrypted status on an authorized host.
+    #[command(alias = "status")]
+    Targets {
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        relay_local_url: Option<String>,
+    },
+    /// Connect to a shared target using the official native Herdr client.
+    Connect {
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        target: String,
+        #[arg(long, default_value = "herdr")]
+        herdr: PathBuf,
+        #[arg(long)]
+        relay_local_url: Option<String>,
+    },
+    /// Add or manage persistent, explicitly shared local targets.
+    Share {
+        #[command(subcommand)]
+        action: ShareAction,
+    },
+    /// Create, import, or invalidate a one-time pairing invitation.
+    Pair {
+        #[command(subcommand)]
+        action: PairAction,
+    },
+    /// Show independent incoming and outgoing device grants.
+    Devices {
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+    },
+    /// Manage incoming device authorization; reverse grants remain independent.
+    Peers {
+        #[command(subcommand)]
+        action: PeerAction,
+    },
+    /// Initialize, inspect, or locally diagnose a persistent device identity.
+    Identity {
+        #[command(subcommand)]
+        action: IdentityAction,
+    },
+    /// Connect an official Herdr 0.9.3 client through a local byte-stream bridge.
+    Local {
+        #[arg(long, required_unless_present = "socket", conflicts_with = "socket")]
+        session: Option<String>,
+        /// An explicit existing native client socket (never the JSON API socket).
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Herdr's configuration directory, normally $XDG_CONFIG_HOME/herdr.
+        #[arg(long, requires = "session")]
+        herdr_config_dir: Option<PathBuf>,
+        #[arg(long, default_value = "herdr")]
+        herdr: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum RelayAction {
+    /// Read aggregate capacity counters using an operator-authorized device identity.
+    Status {
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+        #[arg(long, hide = true)]
+        dev_relay_url: Option<String>,
+    },
+    /// Stop the daemon first. All pairing invitations and grants are invalidated.
+    Switch {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceAction {
+    /// Copy this CLI to persistent private storage and install its service definition.
+    Install {
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+        /// Opt in to automatic start in your login session.
+        #[arg(long)]
+        start_at_login: bool,
+    },
+    Start,
+    Stop,
+    Status,
+    /// Remove the service; preserve identity, grants and shared targets.
+    Uninstall,
+}
+
+#[derive(Subcommand)]
+enum PeerAction {
+    List {
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+    },
+    Revoke {
+        device: String,
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ShareAction {
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long, required_unless_present = "socket", conflicts_with = "socket")]
+        session: Option<String>,
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        #[arg(long, requires = "session")]
+        herdr_config_dir: Option<PathBuf>,
+    },
+    List,
+    Enable {
+        target: String,
+    },
+    Disable {
+        target: String,
+    },
+    Remove {
+        target: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PairAction {
+    Create,
+    Accept {
+        /// Local diagnostic transport to the publishing profile's daemon.sock.
+        #[arg(long, conflicts_with = "relay_local_url")]
+        local_socket: Option<PathBuf>,
+        /// Explicit loopback HTTP transport for local Workers development only.
+        #[arg(long)]
+        relay_local_url: Option<String>,
+    },
+    Revoke {
+        invitation_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum IdentityAction {
+    Init,
+    Show,
+    /// Authenticate two profiles over a local-only Unix socket pair; never dials a network service.
+    Diagnose {
+        #[arg(long)]
+        peer_profile: PathBuf,
+        #[arg(long, default_value = "https://diagnostic.invalid")]
+        origin: String,
+    },
+}
+
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run(Cli::parse()).await {
+        eprintln!("{error}");
+        std::process::exit(if error.code == "CANCELLED" { 130 } else { 1 });
+    }
+}
+
+async fn run(cli: Cli) -> Result<()> {
+    match cli.command {
+        Action::Relay {
+            action:
+                RelayAction::Status {
+                    origin,
+                    dev_relay_url,
+                },
+        } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            let relay =
+                herdr_relay::relay::Relay::new(&profile, &origin, dev_relay_url.as_deref())?;
+            println!("{}", relay.operator_status().await?);
+            Ok(())
+        }
+        Action::Relay {
+            action: RelayAction::Switch { from, to },
+        } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            herdr_relay::pairing::Store::switch_origin(&profile, &from, &to)?;
+            if from == to {
+                println!("Relay origin unchanged: {to}.");
+            } else {
+                println!(
+                    "Relay origin: {to}. Identity and shared targets preserved; pair again for access. Reinstall any user service with this origin before starting it."
+                );
+            }
+            Ok(())
+        }
+        Action::Service { action } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            use herdr_relay::user_service as managed;
+            match action {
+                ServiceAction::Install {
+                    origin,
+                    start_at_login,
+                } => managed::install(&profile, &origin, start_at_login).await,
+                ServiceAction::Start => managed::start(&profile).await,
+                ServiceAction::Stop => managed::stop(&profile).await,
+                ServiceAction::Status => managed::status(&profile).await,
+                ServiceAction::Uninstall => managed::uninstall(&profile).await,
+            }
+        }
+        Action::Serve {
+            origin,
+            relay,
+            relay_local_url,
+            session,
+            socket,
+            herdr_config_dir,
+            name,
+        } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            let remote = if relay {
+                Some(herdr_relay::relay::Relay::new(
+                    &profile,
+                    &origin,
+                    relay_local_url.as_deref(),
+                )?)
+            } else {
+                None
+            };
+            if session.is_some() || socket.is_some() {
+                let display =
+                    name.unwrap_or_else(|| session.clone().unwrap_or_else(|| "Herdr".into()));
+                let locator = select_locator(session, socket, herdr_config_dir)?;
+                let native = locator.resolve()?;
+                let store = herdr_relay::targets::Store::open(&profile)?;
+                let existing = store.list()?.into_iter().find(|t| {
+                    t.locator
+                        .resolve()
+                        .is_ok_and(|candidate| candidate.same_instance(&native))
+                });
+                let target = if let Some(target) = existing {
+                    if !target.enabled {
+                        return Err(Error::new(
+                            "TARGET_DISABLED",
+                            "use share enable to explicitly resume this target",
+                        ));
+                    }
+                    target
+                } else {
+                    store.add(display, locator)?
+                };
+                eprintln!("Shared target: {}", target.id);
+            }
+            herdr_relay::service::run(&profile, &origin, remote).await
+        }
+        Action::Share { action } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            let store = herdr_relay::targets::Store::open(&profile)?;
+            match action {
+                ShareAction::Add {
+                    name,
+                    session,
+                    socket,
+                    herdr_config_dir,
+                } => {
+                    let target =
+                        store.add(name, select_locator(session, socket, herdr_config_dir)?)?;
+                    herdr_relay::service::reload_targets(&profile).await?;
+                    println!("{}  enabled  {}", target.id, target.name);
+                }
+                ShareAction::List => {
+                    for target in store.list()? {
+                        let status = if !target.enabled {
+                            "disabled"
+                        } else if target.locator.resolve().is_ok() {
+                            "enabled"
+                        } else {
+                            "offline"
+                        };
+                        println!(
+                            "{}  {}  {}  {:?}",
+                            target.id, status, target.name, target.locator
+                        );
+                    }
+                }
+                ShareAction::Enable { target } => {
+                    let target = store.select(&target)?;
+                    store.set_enabled(&target.id, true)?;
+                    herdr_relay::service::reload_targets(&profile).await?;
+                    println!("Enabled {}", target.id);
+                }
+                ShareAction::Disable { target } => {
+                    let target = store.select(&target)?;
+                    store.set_enabled(&target.id, false)?;
+                    herdr_relay::service::reload_targets(&profile).await?;
+                    println!("Disabled {}", target.id);
+                }
+                ShareAction::Remove { target } => {
+                    let target = store.select(&target)?;
+                    store.remove(&target.id)?;
+                    herdr_relay::service::reload_targets(&profile).await?;
+                    println!("Removed {}", target.id);
+                }
+            }
+            Ok(())
+        }
+        Action::Targets {
+            origin,
+            host,
+            relay_local_url,
+        } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            let relay =
+                herdr_relay::relay::Relay::new(&profile, &origin, relay_local_url.as_deref())?;
+            for target in relay.targets(&host).await? {
+                println!("{}  {}  {}", target.id, target.status, target.name);
+            }
+            Ok(())
+        }
+        Action::Connect {
+            origin,
+            host,
+            target,
+            herdr,
+            relay_local_url,
+        } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            herdr_relay::client::check_version(&herdr).await?;
+            let relay =
+                herdr_relay::relay::Relay::new(&profile, &origin, relay_local_url.as_deref())?;
+            let reattach = std::env::args()
+                .map(|arg| shell_quote(&arg))
+                .collect::<Vec<_>>()
+                .join(" ");
+            herdr_relay::client::connect_remote(relay, &host, &target, &herdr, &reattach).await
+        }
+        Action::Devices { origin } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            print_peers(&profile, &origin)?;
+            Ok(())
+        }
+        Action::Peers { action } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            match action {
+                PeerAction::List { origin } => print_peers(&profile, &origin)?,
+                PeerAction::Revoke { device, origin } => {
+                    let version = herdr_relay::pairing::Store::open(&profile, &origin)?
+                        .revoke_peer(&device)?;
+                    herdr_relay::service::reload_authorization(&profile).await?;
+                    println!(
+                        "Revoked incoming access for {device} (version {version}). Reverse access remains independent."
+                    );
+                }
+            }
+            Ok(())
+        }
+        Action::Pair { action } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            match action {
+                PairAction::Create => {
+                    let invitation = herdr_relay::service::create_invitation(&profile).await?;
+                    eprintln!(
+                        "One-time invitation {} expires at {} (Unix time). Grants access to all explicitly shared instances.",
+                        invitation.invitation_id, invitation.expires_at
+                    );
+                    println!("{}", invitation.encode()?);
+                }
+                PairAction::Accept {
+                    local_socket,
+                    relay_local_url,
+                } => {
+                    let invitation =
+                        herdr_relay::pairing::Invitation::decode(&read_invitation().await?)?;
+                    let receipt = if let Some(local_socket) = local_socket {
+                        herdr_relay::service::accept_local(&profile, &local_socket, &invitation)
+                            .await?
+                    } else {
+                        herdr_relay::relay::Relay::new(
+                            &profile,
+                            &invitation.origin,
+                            relay_local_url.as_deref(),
+                        )?
+                        .accept(&invitation)
+                        .await?
+                    };
+                    println!(
+                        "Paired: this device may access {} (grant {}). Reverse access was not granted.",
+                        receipt.publisher, receipt.grant_version
+                    );
+                }
+                PairAction::Revoke { invitation_id } => {
+                    herdr_relay::service::revoke_invitation(&profile, &invitation_id).await?;
+                    println!("Invitation revoked.");
+                }
+            }
+            Ok(())
+        }
+        Action::Identity { action } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            match action {
+                IdentityAction::Init => println!(
+                    "{}",
+                    herdr_relay::identity::Identity::initialize(&profile)?.id
+                ),
+                IdentityAction::Show => {
+                    println!("{}", herdr_relay::identity::Identity::load(&profile)?.id)
+                }
+                IdentityAction::Diagnose {
+                    peer_profile,
+                    origin,
+                } => {
+                    let local = herdr_relay::identity::Identity::load(&profile)?;
+                    let peer = herdr_relay::identity::Identity::load(&peer_profile)?;
+                    diagnose(&local, &peer, origin).await?;
+                    println!(
+                        "TLS 1.3 mutual authentication and context binding succeeded\npublisher={}\nconnector={}",
+                        local.id, peer.id
+                    );
+                }
+            }
+            Ok(())
+        }
+        Action::Local {
+            session,
+            socket,
+            herdr_config_dir,
+            herdr,
+        } => {
+            let target = select_target(session, socket, herdr_config_dir)?;
+            let reattach = std::env::args()
+                .map(|arg| shell_quote(&arg))
+                .collect::<Vec<_>>()
+                .join(" ");
+            herdr_relay::client::run_local(target, &herdr, &reattach).await
+        }
+    }
+}
+
+fn print_peers(profile: &std::path::Path, origin: &str) -> Result<()> {
+    let grants = herdr_relay::pairing::Store::open(profile, origin)?.grants()?;
+    println!("Allowed to access this device:");
+    for grant in grants.allowed_here {
+        println!("  {} (grant {})", grant.device_id, grant.version);
+    }
+    println!("Hosts this device can access:");
+    for grant in grants.accessible_hosts {
+        println!("  {} (grant {})", grant.device_id, grant.version);
+    }
+    Ok(())
+}
+
+fn select_locator(
+    session: Option<String>,
+    socket: Option<PathBuf>,
+    config: Option<PathBuf>,
+) -> Result<herdr_relay::targets::Locator> {
+    Ok(if let Some(path) = socket {
+        herdr_relay::targets::Locator::Socket { path }
+    } else {
+        herdr_relay::targets::Locator::Session {
+            config_dir: config.map(Ok).unwrap_or_else(config_dir)?,
+            session: session.unwrap(),
+        }
+    })
+}
+
+fn select_target(
+    session: Option<String>,
+    socket: Option<PathBuf>,
+    config: Option<PathBuf>,
+) -> Result<NativeTarget> {
+    if let Some(path) = socket {
+        NativeTarget::socket(&path)
+    } else {
+        NativeTarget::session(
+            &config.map(Ok).unwrap_or_else(config_dir)?,
+            session.as_deref().unwrap(),
+        )
+    }
+}
+
+fn profile_dir() -> Result<PathBuf> {
+    if let Some(root) = std::env::var_os("XDG_STATE_HOME").filter(|s| !s.is_empty()) {
+        return Ok(PathBuf::from(root).join("herdr-relay"));
+    }
+    std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .map(|root| PathBuf::from(root).join(".local/state/herdr-relay"))
+        .ok_or_else(|| {
+            Error::new(
+                "IDENTITY_STORAGE",
+                "provide --profile when HOME is unavailable",
+            )
+        })
+}
+
+async fn diagnose(
+    local: &herdr_relay::identity::Identity,
+    peer: &herdr_relay::identity::Identity,
+    origin: String,
+) -> Result<()> {
+    use herdr_relay::{
+        control::{Context, Purpose, random_id},
+        secure,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let context = Context {
+        version: 1,
+        origin,
+        publisher: local.id.clone(),
+        connector: peer.id.clone(),
+        purpose: Purpose::Control,
+        grant_version: Some(1),
+        target: None,
+        channel_id: random_id()?,
+        boot_id: random_id()?,
+    };
+    let (a, b) =
+        tokio::net::UnixStream::pair().map_err(|e| Error::new("LOCAL_IO", e.to_string()))?;
+    let exchange = async {
+        let (client, server) = tokio::try_join!(
+            secure::connect(b, peer, &local.certificate, &context),
+            secure::accept(a, local, &peer.certificate, &context)
+        )?;
+        let mut client = client;
+        let mut server = server;
+        client
+            .write_all(b"herdr-relay diagnostic")
+            .await
+            .map_err(diag_io)?;
+        client.flush().await.map_err(diag_io)?;
+        let mut request = [0; 22];
+        server.read_exact(&mut request).await.map_err(diag_io)?;
+        if &request != b"herdr-relay diagnostic" {
+            return Err(Error::new(
+                "DIAGNOSTIC_FAILED",
+                "unexpected encrypted payload",
+            ));
+        }
+        server.write_all(b"ok").await.map_err(diag_io)?;
+        server.flush().await.map_err(diag_io)?;
+        let mut reply = [0; 2];
+        client.read_exact(&mut reply).await.map_err(diag_io)?;
+        if &reply != b"ok" {
+            return Err(Error::new(
+                "DIAGNOSTIC_FAILED",
+                "unexpected encrypted response",
+            ));
+        }
+        Ok(())
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(30), exchange)
+        .await
+        .map_err(|_| {
+            Error::new(
+                "DIAGNOSTIC_TIMEOUT",
+                "local encrypted diagnostic exceeded 30 seconds",
+            )
+        })?
+}
+
+fn diag_io(e: std::io::Error) -> Error {
+    Error::new("DIAGNOSTIC_FAILED", e.to_string())
+}
+
+fn config_dir() -> Result<PathBuf> {
+    if let Some(root) = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
+        return Ok(PathBuf::from(root).join("herdr"));
+    }
+    std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .map(|root| PathBuf::from(root).join(".config/herdr"))
+        .ok_or_else(|| {
+            Error::new(
+                "INVALID_TARGET",
+                "provide --herdr-config-dir when HOME is unavailable",
+            )
+        })
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+async fn read_invitation() -> Result<String> {
+    use std::{
+        io::{BufRead, IsTerminal, Read},
+        os::fd::{AsFd, AsRawFd},
+    };
+    let stdin = std::io::stdin();
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(input_io)?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(input_io)?;
+    let mut hangup =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).map_err(input_io)?;
+    let terminal = if stdin.is_terminal() {
+        eprintln!("Paste the pairing invitation, then press Enter (input hidden):");
+        let saved =
+            herdr_relay::terminal::TerminalState::capture(stdin.as_fd()).map_err(input_io)?;
+        let mut mode = std::mem::MaybeUninit::uninit();
+        if unsafe { libc::tcgetattr(stdin.as_raw_fd(), mode.as_mut_ptr()) } != 0 {
+            return Err(input_io(std::io::Error::last_os_error()));
+        }
+        let mut mode = unsafe { mode.assume_init() };
+        // Avoid canonical line-length truncation for long pasted invitations.
+        mode.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON);
+        mode.c_cc[libc::VMIN] = 1;
+        mode.c_cc[libc::VTIME] = 0;
+        if unsafe { libc::tcsetattr(stdin.as_raw_fd(), libc::TCSANOW, &mode) } != 0 {
+            return Err(input_io(std::io::Error::last_os_error()));
+        }
+        Some(saved)
+    } else {
+        None
+    };
+    let reader = tokio::task::spawn_blocking(|| {
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .lock()
+            .take(8193)
+            .read_until(b'\n', &mut bytes)
+            .map_err(input_io)?;
+        if bytes.len() > 8192 {
+            return Err(Error::new(
+                "PAIR_INVALID",
+                "pairing invitation exceeds size limit",
+            ));
+        }
+        String::from_utf8(bytes)
+            .map(|s| s.trim().to_owned())
+            .map_err(|_| Error::new("PAIR_INVALID", "invalid pairing invitation encoding"))
+    });
+    let result = tokio::select! {
+        result = reader => result.map_err(|_| Error::new("PAIR_INPUT", "unable to read invitation"))?,
+        _ = interrupt.recv() => Err(Error::new("CANCELLED", "pairing cancelled")),
+        _ = terminate.recv() => Err(Error::new("CANCELLED", "pairing cancelled")),
+        _ = hangup.recv() => Err(Error::new("CANCELLED", "pairing cancelled")),
+    };
+    if let Some(terminal) = terminal {
+        drop(terminal);
+        eprintln!();
+    }
+    result
+}
+fn input_io(error: std::io::Error) -> Error {
+    Error::new("PAIR_INPUT", error.to_string())
+}

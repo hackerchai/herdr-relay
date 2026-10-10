@@ -1,0 +1,72 @@
+name: Release
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Skip superseded pushes
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CHECKED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          current=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          if [ -z "$CHECKED_SHA" ] || [ "$current" = "$CHECKED_SHA" ]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        id: release
+        if: steps.current.outputs.run == 'true'
+        with:
+          target-branch: main
+      # GITHUB_TOKEN events do not trigger pull_request workflows. Explicit
+      # dispatch runs the same required checks on the release PR's head SHA.
+      - name: Check generated release PRs
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RELEASE_PRS: ${{ steps.release.outputs.prs }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          for pr in json.loads(os.environ['RELEASE_PRS']):
+              subprocess.run(['gh', 'workflow', 'run', 'ci.yml', '--repo', os.environ['REPO'], '--ref', pr['headBranchName']], check=True)
+          PY
+
+  publish:
+    needs: version
+    if: needs.version.outputs.released == 'true'
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.version.outputs.tag }}
+    secrets: inherit
+    permissions:
+      contents: write

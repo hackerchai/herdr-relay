@@ -1,0 +1,189 @@
+--- a/src/server/client_transport.rs
++++ b/src/server/client_transport.rs
+@@ -45,6 +45,11 @@
+ const OBSERVER_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+ 
+ /// Maximum input payload size (bytes) for a single `ClientMessage::Input`.
++// Preserve the largest framed graphics payload, including serializer spare capacity.
++// In addition to this queued allocation budget, the writer owns at most one frame.
++const MAX_PENDING_CONTROL_BYTES: usize = 2 * (MAX_GRAPHICS_FRAME_SIZE + 8);
++const MAX_PENDING_CONTROL_MESSAGES: usize = 256;
++
+ const MAX_INPUT_PAYLOAD: usize = 1024 * 1024; // 1 MB
+ const MAX_CLIENT_SHELL_DIMENSION: u16 = 4096;
+ const MAX_CLIENT_SHELL_CELLS: u32 = 1_000_000;
+@@ -145,6 +150,7 @@
+     pub(crate) fn test_drain(&self) -> Vec<Vec<u8>> {
+         let mut state = self.render.queue.lock_state();
+         let mut frames = state.control.drain(..).collect::<Vec<_>>();
++        state.control_bytes = 0;
+         frames.extend(state.ordered.drain(..));
+         frames.extend(state.render.take());
+         frames
+@@ -273,10 +279,29 @@
+ #[derive(Debug, Default)]
+ struct ClientWriterQueueState {
+     control: VecDeque<Vec<u8>>,
++    control_bytes: usize,
++    #[cfg(unix)]
++    stream: Option<LocalStream>,
+     ordered: VecDeque<Vec<u8>>,
+     render: Option<Vec<u8>>,
+     senders: usize,
+     writer_alive: bool,
++}
++
++impl ClientWriterQueueState {
++    fn close(&mut self) {
++        self.writer_alive = false;
++        #[cfg(unix)]
++        if let Some(stream) = self.stream.take() {
++            // Dropping a cloned writer does not interrupt an outstanding read
++            // or write on another clone. Shut down both directions explicitly.
++            let _ = crate::platform::shutdown_client_stream(&stream);
++        }
++        self.control.clear();
++        self.control_bytes = 0;
++        self.render = None;
++        self.ordered.clear();
++    }
+ }
+ 
+ #[derive(Debug, PartialEq, Eq)]
+@@ -312,6 +337,14 @@
+         if !state.writer_alive {
+             return Err(SendError(data));
+         }
++        if state.control.len() >= MAX_PENDING_CONTROL_MESSAGES
++            || data.capacity() > MAX_PENDING_CONTROL_BYTES.saturating_sub(state.control_bytes)
++        {
++            state.close();
++            self.ready.notify_all();
++            return Err(SendError(data));
++        }
++        state.control_bytes += data.capacity();
+         state.control.push_back(data);
+         self.ready.notify_one();
+         Ok(())
+@@ -356,7 +389,11 @@
+     fn recv(&self) -> Option<ClientWriteItem> {
+         let mut state = self.lock_state();
+         loop {
++            if !state.writer_alive {
++                return None;
++            }
+             if let Some(data) = state.control.pop_front() {
++                state.control_bytes -= data.capacity();
+                 return Some(ClientWriteItem::Control(data));
+             }
+             if let Some(data) = state.ordered.pop_front() {
+@@ -378,9 +415,7 @@
+ 
+     fn close_writer(&self) {
+         let mut state = self.lock_state();
+-        state.writer_alive = false;
+-        state.render = None;
+-        state.ordered.clear();
++        state.close();
+         self.ready.notify_all();
+     }
+ 
+@@ -856,6 +891,10 @@
+ 
+     // Create separate channels for reliable control messages and droppable renders.
+     let writer_queue = ClientWriterQueue::new();
++    #[cfg(unix)]
++    {
++        writer_queue.lock_state().stream = Some(stream.try_clone()?);
++    }
+     let writer = ClientWriter {
+         control: ClientControlWriter::queue(writer_queue.clone()),
+         render: ClientRenderWriter::queue(writer_queue.clone()),
+@@ -1537,6 +1576,87 @@
+     }
+ 
+     #[test]
++    fn control_overflow_disconnects_only_the_slow_client() {
++        let (slow, queue) = test_queue_writer();
++        let (healthy, healthy_queue) = test_queue_writer();
++        for _ in 0..256 {
++            slow.control.send(vec![1]).expect("bounded control slots");
++        }
++        assert!(
++            slow.control.send(vec![2]).is_err(),
++            "overflow must terminate the slow client"
++        );
++        assert!(slow.control.send(vec![3]).is_err());
++        assert!(matches!(
++            slow.render.try_send(vec![4]),
++            Err(TrySendError::Disconnected(_))
++        ));
++        assert_eq!(queue.recv(), None, "closed queue releases pending data");
++        healthy.control.send(vec![5]).unwrap();
++        assert_eq!(
++            healthy_queue.recv(),
++            Some(ClientWriteItem::Control(vec![5]))
++        );
++    }
++
++    #[test]
++    fn control_byte_budget_counts_capacity_and_recovers_after_drain() {
++        let (writer, queue) = test_queue_writer();
++        let allocation = || {
++            let mut data = Vec::with_capacity(64 * 1024 * 1024 + 16);
++            data.push(7);
++            data
++        };
++        writer.control.send(allocation()).unwrap();
++        assert_eq!(queue.recv(), Some(ClientWriteItem::Control(vec![7])));
++        writer
++            .control
++            .send(allocation())
++            .expect("draining returns byte capacity");
++        assert!(
++            writer.control.send(vec![8]).is_err(),
++            "count allocated bytes, not just vector length"
++        );
++        assert_eq!(queue.recv(), None);
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn control_overflow_interrupts_a_blocked_native_writer_and_reader() {
++        use std::io::Read as _;
++        let (mut client, server, _path) = local_stream_pair("bounded-control");
++        client
++            .set_recv_timeout(Some(Duration::from_secs(2)))
++            .unwrap();
++        let (events, mut receiver) = mpsc::channel(8);
++        let (done_tx, done_rx) = std::sync::mpsc::channel();
++        let handle = std::thread::spawn(move || {
++            let result =
++                handle_client_handshake(server, 71, &events, &Arc::new(AtomicBool::new(false)));
++            let _ = done_tx.send(result);
++        });
++        protocol::write_message(&mut client, &endpoint_hello(80, 24)).unwrap();
++        let _: ServerMessage = protocol::read_message(&mut client, MAX_FRAME_SIZE).unwrap();
++        let ServerEvent::ClientShellConnected { writer, .. } =
++            recv_server_event(&mut receiver, "connected")
++        else {
++            panic!("expected native client")
++        };
++        writer.control.send(vec![0; 4 * 1024 * 1024]).unwrap();
++        client.read_exact(&mut [0]).unwrap(); // writer has entered socket I/O
++        let overflowed = (0..512).any(|_| writer.control.send(vec![1; 65536]).is_err());
++        assert!(overflowed);
++        let stopped = done_rx.recv_timeout(Duration::from_secs(2));
++        // Always release the owned stream, including the red regression run.
++        let _ = crate::platform::shutdown_client_stream(&client);
++        handle.join().unwrap();
++        assert!(
++            stopped.is_ok(),
++            "overflow must wake the blocked native reader without a peer action"
++        );
++    }
++
++    #[test]
+     fn client_writer_queue_keeps_render_slot_bounded() {
+         let (writer, _queue) = test_queue_writer();
+         let first = frame_server_message(&ServerMessage::WindowTitle {
