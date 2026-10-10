@@ -168,7 +168,9 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     serve_after_auth(stream, profile, context, targets, || async { Ok(()) }).await
 }
 
-pub(crate) async fn serve_after_auth<S, F, Fut>(
+/// Serve one authorized channel. `authenticated` reports successful mutual
+/// authentication to the relay; the native stream starts only after it succeeds.
+pub async fn serve_after_auth<S, F, Fut>(
     stream: S,
     profile: &Path,
     context: &Context,
@@ -229,18 +231,23 @@ where
         if grant(profile, &context.origin, &context.connector, true)?.version != saved.version {
             return Err(Error::new("NOT_AUTHORIZED", "device grant changed"));
         }
-        authenticated().await?;
+        // The relay acknowledgement takes its own round trips; overlap it with
+        // the endpoint exchange. Native bytes still wait for both to succeed.
+        let authenticated = authenticated();
         match context.purpose {
             Purpose::Control => {
-                control::send(
-                    &mut stream,
-                    &Response::Targets {
-                        targets: targets.iter().map(|t| t.status()).collect(),
-                    },
-                )
-                .await?;
-                let _: Ack = control::receive(&mut stream).await?;
-                Ok(())
+                let exchange = async {
+                    control::send(
+                        &mut stream,
+                        &Response::Targets {
+                            targets: targets.iter().map(|t| t.status()).collect(),
+                        },
+                    )
+                    .await?;
+                    let _: Ack = control::receive(&mut stream).await?;
+                    Ok(())
+                };
+                tokio::try_join!(exchange, authenticated).map(|_| ())
             }
             Purpose::Attach => {
                 let target = target
@@ -252,17 +259,21 @@ where
                     .ok_or_else(|| Error::new("TARGET_OFFLINE", "target is offline"))?;
                 native_target.check_current()?;
                 let reservation = native_target.reserve()?;
-                control::send(
-                    &mut stream,
-                    &Response::Ready {
-                        runtime_id: target.runtime_id.clone(),
-                    },
-                )
-                .await?;
-                let start: Start = control::receive(&mut stream).await?;
-                if start.runtime_id != target.runtime_id {
-                    return Err(Error::new("TARGET_CHANGED", "target runtime changed"));
-                }
+                let exchange = async {
+                    control::send(
+                        &mut stream,
+                        &Response::Ready {
+                            runtime_id: target.runtime_id.clone(),
+                        },
+                    )
+                    .await?;
+                    let start: Start = control::receive(&mut stream).await?;
+                    if start.runtime_id != target.runtime_id {
+                        return Err(Error::new("TARGET_CHANGED", "target runtime changed"));
+                    }
+                    Ok(())
+                };
+                tokio::try_join!(exchange, authenticated)?;
                 if grant(profile, &context.origin, &context.connector, true)?.version
                     != saved.version
                 {

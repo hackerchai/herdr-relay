@@ -16,6 +16,7 @@ pub mod service;
 pub mod stream;
 pub mod targets;
 pub mod terminal;
+pub mod timing;
 pub mod transport;
 pub mod tui;
 pub mod update;

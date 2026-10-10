@@ -193,6 +193,7 @@ impl Relay {
             .await
             .map_err(network)?;
         let challenge: Challenge = response_json(response).await?;
+        crate::timing::mark("challenge");
         if challenge.origin != self.origin
             || challenge.method != method
             || challenge.path != path
@@ -258,7 +259,9 @@ impl Relay {
         )
         .await
         .map_err(|_| Error::new("NETWORK_LOST", "relay WebSocket connection timed out"))?;
-        result.map(|(socket, _)| socket).map_err(socket_error)
+        let socket = result.map(|(socket, _)| socket).map_err(socket_error)?;
+        crate::timing::mark("websocket");
+        Ok(socket)
     }
     pub async fn register_invitation(&self, invitation: &Invitation) -> Result<()> {
         #[derive(Deserialize)]
@@ -370,10 +373,11 @@ impl Relay {
                             context.validate()?;
                             let relay = self.clone();
                             let registry = registry.clone();
-                            tasks.spawn(async move {
+                            tasks.spawn(crate::timing::scope("serve", async move {
                                 let result = async {
                                     let permit=relay.pending.clone().try_acquire_owned().map_err(|_|Error::new("QUOTA_EXCEEDED","four handshakes are already pending"))?;
                                     let stream = relay.join(&relay.identity.id,&channel_id,"publisher",&ticket,&boot_id,(context.purpose == Purpose::Attach).then_some(limits.unwrap_or_default())).await?;
+                                    crate::timing::mark("joined");
                                     if context.purpose == Purpose::Pair {
                                         let store = Store::open(&relay.profile,&relay.origin)?;
                                         // Admit the committed grant before returning its receipt, so
@@ -385,7 +389,7 @@ impl Relay {
                                     }
                                 }.await;
                                 if let Err(error) = result { eprintln!("Remote channel ended: {}",error.code); }
-                            });
+                            }));
                         },
                         _ => return Err(disconnected()),
                     }
@@ -419,6 +423,7 @@ impl Relay {
             } if channel_id == channel && boot_id == boot => {}
             _ => return Err(protocol()),
         }
+        crate::timing::mark("route_ready");
         if let Some(limits) = limits {
             let id: [u8; 16] = hex::decode(channel)
                 .map_err(|_| protocol())?
@@ -450,6 +455,7 @@ impl Relay {
                 &serde_json::json!({"channel_id":channel,"purpose":purpose,"target_id":target}),
             )
             .await?;
+        crate::timing::mark("access");
         if opened.channel_id != channel {
             return Err(protocol());
         }
@@ -523,6 +529,7 @@ impl Relay {
                 if result["authenticated"] != true {
                     return Err(protocol());
                 }
+                crate::timing::mark("authenticated");
                 drop(permit);
                 Ok(())
             });
@@ -536,8 +543,12 @@ impl Relay {
         }
     }
     pub async fn targets(&self, publisher: &str) -> Result<Vec<TargetStatus>> {
+        crate::timing::scope("targets", self.targets_inner(publisher)).await
+    }
+    async fn targets_inner(&self, publisher: &str) -> Result<Vec<TargetStatus>> {
         let mut stream = self.access(publisher, None, &random_id()?).await?;
         let response: host::Response = control::receive(&mut stream).await?;
+        crate::timing::mark("listed");
         let _ = control::send(&mut stream, &host::Ack {}).await;
         match response {
             host::Response::Targets { targets } => Ok(targets),
@@ -563,11 +574,25 @@ impl Relay {
         target: &str,
         channel: &str,
     ) -> Result<PreparedAttach> {
-        let mut stream = self.access(publisher, Some(target), channel).await?;
-        match control::receive(&mut stream).await? {
-            host::Response::Ready { runtime_id } => Ok(PreparedAttach { stream, runtime_id }),
+        crate::timing::scope("prepare_attach", async {
+            let mut stream = self.access(publisher, Some(target), channel).await?;
+            self.ready(&mut stream)
+                .await
+                .map(|runtime_id| PreparedAttach { stream, runtime_id })
+        })
+        .await
+    }
+    async fn ready(
+        &self,
+        stream: &mut tokio_rustls::client::TlsStream<ChannelStream>,
+    ) -> Result<String> {
+        match control::receive(stream).await? {
+            host::Response::Ready { runtime_id } => {
+                crate::timing::mark("ready");
+                Ok(runtime_id)
+            }
             host::Response::Rejected { code } => {
-                let _ = control::send(&mut stream, &host::Ack {}).await;
+                let _ = control::send(stream, &host::Ack {}).await;
                 Err(remote_error(&code))
             }
             _ => Err(protocol()),
@@ -583,7 +608,10 @@ impl PreparedAttach {
     pub fn runtime_id(&self) -> &str {
         &self.runtime_id
     }
-    pub async fn start(mut self) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
+    pub async fn start(self) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
+        crate::timing::scope("start", self.start_inner()).await
+    }
+    async fn start_inner(mut self) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
         control::send(
             &mut self.stream,
             &host::Start {
@@ -592,7 +620,10 @@ impl PreparedAttach {
         )
         .await?;
         match control::receive(&mut self.stream).await? {
-            host::Response::Started => Ok(self.stream),
+            host::Response::Started => {
+                crate::timing::mark("started");
+                Ok(self.stream)
+            }
             host::Response::Rejected { code } => {
                 let _ = control::send(&mut self.stream, &host::Ack {}).await;
                 Err(remote_error(&code))

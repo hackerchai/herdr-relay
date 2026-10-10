@@ -213,7 +213,9 @@ pub async fn connect<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     .await
     .map_err(|_| Error::new("TLS_TIMEOUT", "device TLS handshake exceeded 10 seconds"))?
     .map_err(tls_io)?;
+    crate::timing::mark("tls");
     crate::control::bind(&mut stream, context).await?;
+    crate::timing::mark("bind");
     Ok(stream)
 }
 
@@ -234,7 +236,9 @@ pub async fn accept<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     .await
     .map_err(|_| Error::new("TLS_TIMEOUT", "device TLS handshake exceeded 10 seconds"))?
     .map_err(tls_io)?;
+    crate::timing::mark("tls");
     crate::control::bind(&mut stream, context).await?;
+    crate::timing::mark("bind");
     Ok(stream)
 }
 
