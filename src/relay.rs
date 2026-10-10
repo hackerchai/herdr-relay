@@ -575,7 +575,8 @@ impl Relay {
                         purpose,
                         target,
                     )
-                    .await?;
+                    .await
+                    .inspect_err(|_| crate::timing::mark("direct_failed"))?;
                     Ok((connected.stream, connected.address))
                 }
             });
