@@ -13,17 +13,24 @@ include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/R
 description = "An authenticated relay for native Herdr clients"
 
 [dependencies]
+base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.29"
+flate2 = "1"
 futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
+hostname = "0.4"
 httpdate = "1.0"
 libc = "0.2"
+ratatui = { version = "0.30.2", default-features = false, features = ["std", "crossterm", "crossterm_0_29"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "crypto"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+tar = "0.4"
 tempfile = "3"
 time = "0.3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "time"] }

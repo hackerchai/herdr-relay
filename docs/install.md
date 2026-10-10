@@ -38,6 +38,23 @@ default is group-writable. Existing directory permissions are not changed.
 It does not edit shell startup files, install services, or change Gatekeeper
 settings. These candidates are not notarized public macOS packages.
 
+## Interactive setup and updates
+
+The normal setup is `herdr-relay serve` on the host, then `herdr-relay pair`
+on the client. Paste the link and use the hostname/session menus. See the
+[quickstart](quickstart.md). The commands below remain available for scripts
+and explicit administration.
+
+`herdr-relay update --check` checks without installing. `herdr-relay update`
+installs a complete stable GitHub Release for the running executable's OS and
+architecture (including x86_64 under Rosetta). The updater preserves a previous
+binary for recovery, updates the service copy, and keeps stopped services stopped.
+An active session defers the service update until stop/start; add
+`--restart-service` to explicitly restart immediately. Private GitHub assets need
+the caller's own repository access via `gh auth login` or `GH_TOKEN`.
+The public source-install alternative is `cargo install herdr-relay --locked --force`.
+Externally managed installations must be upgraded using their package manager.
+
 ## macOS user service
 
 Initialize the device, explicitly save shared targets, then install the service:
@@ -96,9 +113,10 @@ rate. Explicit stop does not remove enablement for a future user-manager start.
 `service status` reports `loginctl`'s current Linger setting when available.
 With lingering disabled, the service's lifetime depends on login/session policy;
 closing the last login session can stop the user manager. With lingering enabled,
-the manager may remain active after logout. Relay does not enable lingering or
-change system login policy. Any administrator-required linger change is an
-explicit local administrator action. It is not promised by the installer.
+the manager may remain active after logout. `service autostart boot` explicitly
+enables lingering, subject to the system authorization policy. Ordinary install
+and login startup do not change this user-wide policy; uninstall never disables
+lingering, because other user services may depend on it.
 
 Startup needs a working systemd user bus, normally supplied by the distribution's
 login/session stack. If systemd or the user bus is absent, run foreground mode:

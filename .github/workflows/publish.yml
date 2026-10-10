@@ -176,3 +176,10 @@ jobs:
           npm run deploy:production
       - name: Check production protocol endpoint
         run: python3 scripts/check-relay.py https://herdr-relay.hackerchai.com
+      - name: Publish update readiness manifest after all release gates pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          python3 scripts/update-manifest.py
+          gh release upload "$TAG" target/packages/herdr-relay-update.json --clobber

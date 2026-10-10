@@ -18,4 +18,6 @@
 | [ADR-0012](0012-single-active-client-per-target.md) | 同实例单活动 Relay 客户端；后来连接报忙且不抢占 | Q16 用户修正；忙碌与释放语义为对应工程选择 |
 | [ADR-0013](0013-private-repository-public-crate.md) | 私有 GitHub、MIT 与公开 crates.io；生产域名及 10 美元预算 | 2026-10-10 用户确认 |
 
+| [ADR-0014](0014-interactive-cli-and-server-lifecycle.md) | Interactive CLI, named hosts, pairing links, server autostart and release updates | 2026-10-10 maintainer request |
+
 完整范围和验收见 [REQUIREMENTS.md](../../REQUIREMENTS.md)，术语见 [CONTEXT.md](../../CONTEXT.md)。
