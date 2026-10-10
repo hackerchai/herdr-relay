@@ -11,8 +11,20 @@ contains CLI and Worker source plus self-host materials. Four-platform binary
 assets are available to repository members. [Release readiness](docs/release-readiness.md)
 records publication and acceptance evidence.
 
-[Version 0.1.1 is published on crates.io](https://crates.io/crates/herdr-relay/0.1.1).
-Install with `cargo install herdr-relay --locked` (Rust 1.99 or newer).
+Install the latest [public crates.io release](https://crates.io/crates/herdr-relay)
+with Rust 1.99 or newer:
+
+```sh
+cargo install herdr-relay --locked
+herdr-relay --version
+```
+
+Install the official [Herdr 0.9.3](https://github.com/herdrdev/herdr/releases/tag/v0.9.3)
+client separately on both computers. Relay connects to an already running Herdr
+session; it does not start the server. The default public Relay needs no
+Cloudflare account. See the [installation guide](docs/install.md) for services
+and [self-hosting guide](docs/self-hosting.md) for your own Cloudflare deployment.
+
 The [release record](docs/validation/2026-10-10-release-0.1.1.md) identifies the
 four-platform assets, production deployment and actual acceptance coverage.
 
