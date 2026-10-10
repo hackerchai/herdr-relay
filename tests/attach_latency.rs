@@ -116,3 +116,29 @@ async fn targets_are_listed_while_the_relay_acknowledgement_is_still_pending() {
     drop(stream);
     let _ = task.await;
 }
+
+#[tokio::test]
+async fn a_completed_listing_is_not_failed_by_a_late_relay_acknowledgement() {
+    let fixture = Fixture::new();
+    let context = fixture.context(Purpose::Control);
+    let (host_side, client_side) = tokio::io::duplex(65536);
+    let (profile, expected, target) = (fixture.host(), context.clone(), fixture.target.clone());
+    let task = tokio::spawn(async move {
+        host::serve_after_auth(host_side, &profile, &expected, &[target], || async {
+            // The client already closed the channel, so the relay refuses it.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Err(Error::new("NOT_AUTHORIZED", "channel already ended"))
+        })
+        .await
+    });
+    let stream = secure::connect(client_side, &fixture.b, &fixture.a.certificate, &context)
+        .await
+        .unwrap();
+    let targets = host::list_targets(stream, &fixture.client(), common::ORIGIN, &fixture.a.id)
+        .await
+        .unwrap();
+    assert_eq!(targets.len(), 1);
+    task.await
+        .unwrap()
+        .expect("a delivered listing is a success");
+}

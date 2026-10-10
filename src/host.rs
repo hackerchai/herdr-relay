@@ -379,7 +379,19 @@ where
                     }
                     Ok(())
                 };
-                tokio::try_join!(exchange, authenticated).map(|_| ())
+                // A listing is complete once delivered; the client may close the
+                // channel before a late relay acknowledgement, which is moot then.
+                tokio::pin!(exchange, authenticated);
+                let mut acknowledged = false;
+                loop {
+                    tokio::select! {
+                        result = &mut exchange => return result,
+                        result = &mut authenticated, if !acknowledged => {
+                            result?;
+                            acknowledged = true;
+                        }
+                    }
+                }
             }
             Purpose::Attach => {
                 let target = target
