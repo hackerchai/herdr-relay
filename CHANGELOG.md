@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/hackerchai/herdr-relay/compare/v0.2.0...v0.2.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* publish anonymous updates through a public binary channel ([c3ff006](https://github.com/hackerchai/herdr-relay/commit/c3ff006183f2a246e94206acbe52574fc3b44bce))
+
 ## [0.2.0](https://github.com/hackerchai/herdr-relay/compare/v0.1.2...v0.2.0) (2026-10-10)
 
 
