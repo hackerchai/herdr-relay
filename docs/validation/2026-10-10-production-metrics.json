@@ -1,0 +1,46 @@
+{
+  "origin": "https://herdr-relay.hackerchai.com",
+  "cli_source_commit": "2d0b7c7a0d0fa9603a806cc69887d2a488a2b3e5",
+  "cli_version": "0.0.0 bootstrap; first release tag pending",
+  "native_version": "0.9.3-custom.relay-control-bound-1",
+  "initial_core": {
+    "fresh_pairing": true,
+    "PRODUCTION_NATIVE_中文": true,
+    "same_target_busy": true,
+    "PRODUCTION_BUSY_HOLDER_SURVIVED": true,
+    "PRODUCTION_FRESH_RECONNECT": true,
+    "revocation_seconds": 2.533,
+    "revoked_discovery_denied": true,
+    "PRODUCTION_REPAIRED": true,
+    "native_server_survived": true
+  },
+  "post_rollback_recovery": {
+    "fresh_pairing": true,
+    "PRODUCTION_NATIVE_中文": true,
+    "same_target_busy": true,
+    "PRODUCTION_BUSY_HOLDER_SURVIVED": true,
+    "PRODUCTION_AUTOMATIC_RECONNECT": true,
+    "offline_input_not_replayed": true,
+    "PRODUCTION_FRESH_RECONNECT": true,
+    "revocation_seconds": 2.703,
+    "revoked_discovery_denied": true,
+    "PRODUCTION_REPAIRED": true,
+    "native_server_survived": true
+  },
+  "rollback": {
+    "baseline_version": "f727ff3d-69d8-43d9-a9a8-366e831f39aa",
+    "closed_admission_version": "2f7d1561-5b32-45cc-a1f0-8b56bfae679c",
+    "closed_response": "503 RELAY_BUSY",
+    "restored_version": "f727ff3d-69d8-43d9-a9a8-366e831f39aa",
+    "protocol_probe_passed": true
+  },
+  "rate_limit": {
+    "requests_sent": 33,
+    "responses": {
+      "400 PROTOCOL_ERROR": 30,
+      "429 RATE_LIMITED": 3
+    },
+    "retry_after_seconds": "60",
+    "cli_rate_limit_feedback": "RATE_LIMITED: relay rejected the request"
+  }
+}

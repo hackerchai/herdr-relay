@@ -15,7 +15,7 @@
 | [ADR-0009](0009-public-free-relay-with-quotas.md) | 默认服务公开免费，并设资源配额 | Q14 |
 | [ADR-0010](0010-independent-native-client-channels.md) | 每次 attach 独立 native socket 与加密通道 | 本机探针与源码核对；工程设计采用 |
 | [ADR-0011](0011-endpoint-tls-and-pairing.md) | 内层 TLS、公钥固定与原子配对事务 | 工程选择；已有受控云端和四平台候选记录 |
-| [ADR-0013](0013-private-repository-public-crate.md) | 私有 GitHub、MIT 与公开 crates.io；生产域名及 10 美元预算 | 2026-10-10 用户确认 |
 | [ADR-0012](0012-single-active-client-per-target.md) | 同实例单活动 Relay 客户端；后来连接报忙且不抢占 | Q16 用户修正；忙碌与释放语义为对应工程选择 |
+| [ADR-0013](0013-private-repository-public-crate.md) | 私有 GitHub、MIT 与公开 crates.io；生产域名及 10 美元预算 | 2026-10-10 用户确认 |
 
 完整范围和验收见 [REQUIREMENTS.md](../../REQUIREMENTS.md)，术语见 [CONTEXT.md](../../CONTEXT.md)。
