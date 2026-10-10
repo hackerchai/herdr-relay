@@ -8,8 +8,10 @@ shared sessions, and background sharing with automatic reconnect.
 
 ## Install
 
-Install [Herdr 0.9.3](https://github.com/herdrdev/herdr/releases/tag/v0.9.3) on both
-computers, then get Herdr Relay from the
+Install [Herdr latest](https://github.com/herdrdev/herdr/releases/latest) on both
+computers. Herdr Relay has been tested with Herdr 0.9.3.
+
+Get Herdr Relay from the
 [public binary releases](https://github.com/hackerchai/herdr-relay-releases/releases/latest)
 or install it with Rust 1.99 or newer:
 
