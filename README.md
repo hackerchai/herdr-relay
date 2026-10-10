@@ -26,16 +26,12 @@ session; it does not start the server. The default public Relay needs no
 Cloudflare account. See the [installation guide](docs/install.md) for services
 and [self-hosting guide](docs/self-hosting.md) for your own Cloudflare deployment.
 
-The [release record](docs/validation/2026-10-10-release-0.2.1.md) identifies the
-four-platform assets, production deployment and actual acceptance coverage.
-
 For the bounded native server, use the [Herdr 0.9.3 compatibility patch](patches/herdr/README.md).
 An unmodified upstream server still has its original unbounded control queue.
-The maintainer accepted GUI testing; the [candidate record](docs/validation/2026-10-10-candidates.md)
-retains actual OS, Rosetta and VM coverage.
+The maintainer accepted GUI testing; see [release readiness](docs/release-readiness.md)
+for platform coverage and its limits.
 
-Requirements are in [REQUIREMENTS.md](REQUIREMENTS.md), decisions are in
-[docs/adr](docs/adr/README.md), and implementation work is tracked in
+Requirements and implementation work are tracked in
 [GitHub Issues](https://github.com/hackerchai/herdr-relay/issues).
 
 ## Quick start
@@ -138,8 +134,7 @@ including a pending attach. A second returns `TARGET_BUSY`.
 
 Errors distinguish missing/unsafe targets, incompatible client version,
 startup failure, handshake timeout and cancellation. No Relay control message
-is written into the native byte stream. See the
-[manual acceptance record](docs/validation/2026-10-10-local-cli.md).
+is written into the native byte stream.
 
 ## Device identity and local encrypted diagnostic
 
@@ -155,8 +150,7 @@ The default profile is `$XDG_STATE_HOME/herdr-relay`, or
 `$HOME/.local/state/herdr-relay`. Profiles must be private directories; missing
 directories are created with mode 0700. Keys are stored with mode 0600. Losing
 a key never silently creates a replacement identity. The diagnostic uses a
-local socket pair and does not grant access to either device. See the
-[identity and TLS acceptance record](docs/validation/2026-10-10-device-tls.md).
+local socket pair and does not grant access to either device.
 
 ## Local pairing workflow
 
@@ -186,8 +180,7 @@ redemption can recover its original result for 24 hours by importing the same
 invitation from the same profile. Grants persist until explicitly revoked.
 Pairing grants B access to A's explicitly shared instances; it does not publish
 local resources or grant A access to B. The local transport currently serves
-diagnostics; the origin identifies the trust scope and is not dialed. See the
-[manual pairing record](docs/validation/2026-10-10-local-pairing.md).
+diagnostics; the origin identifies the trust scope and is not dialed.
 
 For pairing through the Worker/DO runtime, see the
 [Relay development guide](relay/README.md). Both endpoints initiate their
@@ -210,8 +203,7 @@ all shared targets; other peers and independently granted reverse access keep
 working. Offline revocation takes effect when the service next starts. A saved
 invitation receipt cannot restore a revoked grant: access requires a fresh
 invitation. If Relay synchronization fails, `REVOKED_LOCALLY` means the local
-revocation has already committed. See the
-[revocation acceptance record](docs/validation/2026-10-10-revocation.md).
+revocation has already committed.
 
 ## Persistent shared targets
 
@@ -249,20 +241,18 @@ shows a retry delay; press Ctrl-C to cancel. Offline keystrokes are discarded,
 including pending input before the native client restarts. A busy target,
 revoked grant, identity/version failure, or removed target ends recovery.
 The publisher service also reconnects while keeping local administration
-available. Recovery never starts a Herdr server. See the
-[network recovery record](docs/validation/2026-10-10-reconnect.md).
+available. Recovery never starts a Herdr server.
 Use `share list`, `share disable <id-or-exact-name>`, `share enable` and
 `share remove` to manage saved definitions. Disabling or removing a target
 closes only its channels; enabled targets and grants remain intact. Disabled
 targets stay disabled after a service restart. Duplicate session/socket aliases
-are rejected even when the original target is disabled. See the
-[remote acceptance record](docs/validation/2026-10-10-remote-native.md).
+are rejected even when the original target is disabled.
 
 The service observes the saved sessions or socket paths. When an enabled
 instance restarts, it closes the old runtime's channels and restores sharing
 with the same target ID and current grants. Waiting clients attach to the new
 runtime; the service never starts Herdr. Restarting one target leaves the others
-connected. See the [runtime recovery record](docs/validation/2026-10-10-runtime-recovery.md).
+connected.
 
 ## Isolated upstream compatibility probe
 
@@ -296,9 +286,8 @@ python3 scripts/probe-herdr-0.9.3.py /tmp/herdr-relay-tools/herdr-macos-aarch64
 This checks upstream native protocol behavior. It does **not** test a real TUI,
 the Rust CLI bridge, device trust, or a Cloudflare connection. In particular,
 the probe's use of multiple native clients does not change the product rule:
-one active Relay client per Herdr instance. See the
-[compatibility report](docs/herdr-compatibility.md) and
-[bootstrap evidence](docs/validation/2026-10-10-bootstrap.md).
+one active Relay client per Herdr instance. Use the
+[manual acceptance checklist](docs/manual-acceptance.md) to validate the complete workflow.
 
 Keep credentials outside the repository. Build output, local environment files,
 and Wrangler development secrets are ignored by Git.

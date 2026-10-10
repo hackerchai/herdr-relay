@@ -1,9 +1,9 @@
 # Controlled Relay operations
 
 Production uses `herdr-relay.hackerchai.com` in the maintainer's Cloudflare account.
-[ADR-0013](adr/0013-private-repository-public-crate.md) fixes the private repository,
-MIT/public crate distribution, USD 10 monthly ceiling and best-effort user-service
-scope. Production overrides are in `relay/wrangler.production.jsonc`; the table
+The project uses a private repository, MIT/public crate distribution, a USD 10
+monthly ceiling and best-effort user-service scope. Production overrides are in
+`relay/wrangler.production.jsonc`; the table
 below gives general self-host defaults.
 
 Workers/SQLite DO remain on Free: exhaustion rejects requests rather than buying
@@ -91,10 +91,9 @@ external notification is installed by the code:
 Use Cloudflare account Analytics/GraphQL for actual Worker requests/CPU/errors,
 DO active time and GB-seconds, WebSocket counts, SQL rows read/written and storage.
 Compare these to the prepaid/application counters; they measure different things.
-The [hibernation measurement](validation/2026-10-10-hibernation.md) supplies a
-baseline, but v3 adds one global renewal RPC per publisher/active channel roughly
-every 30 seconds, plus entry/challenge operations and expiry alarms. Its original
-cost samples must not be presented as v3 measurements.
+Version 3 adds one global renewal RPC per publisher/active channel roughly
+every 30 seconds, plus entry/challenge operations and expiry alarms. Measure the
+current deployment; older cost samples do not represent these additional calls.
 
 Configure Cloudflare budget/usage notifications with the account's supported
 notification features after #19 specifies recipients and thresholds. Budget

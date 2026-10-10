@@ -99,8 +99,8 @@ identity/generation, grants, target uniqueness, credit and rate budget together.
 Missing or conflicting state closes with `STATE_CONFLICT`; no role or fresh
 credit is recreated. The publisher-only status includes a per-construction
 instance ID, persistent maintenance counters and ciphertext offsets/message
-counts. Real sleep/wake and platform cost observations are recorded in
-[hibernation validation](../docs/validation/2026-10-10-hibernation.md).
+counts. Use the [manual acceptance checklist](../docs/manual-acceptance.md) to
+record actual sleep/wake behavior and platform costs for each deployment.
 
 API implementation references: [Cloudflare Hibernation WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/),
 [SQLite transactions](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/),
@@ -194,8 +194,9 @@ The signed publisher-only status route exposes ciphertext bytes outstanding,
 peak window use, bounded close counters and limits. It exposes no terminal data,
 display names, paths, tickets or secrets. Workers has no documented send-queue
 length API; these metrics measure application pressure, not private platform
-queue internals. See the [flow-control validation](../docs/validation/2026-10-10-flow-control.md)
-for resource measurements and the separate upstream Herdr limitation.
+queue internals. See the [manual acceptance checklist](../docs/manual-acceptance.md)
+for resource checks and the [Herdr compatibility patch](../patches/herdr/README.md)
+for the separate upstream control-queue limit.
 
 Target definitions now persist separately in private `targets.json` snapshots.
 `share add/list/enable/disable/remove` manage exact session/socket locators and

@@ -1,8 +1,12 @@
 # Herdr Relay 设计
 
-> 2026-10-09 需求访谈更新：**第一版交付可用 Rust CLI 与 TypeScript Cloudflare Worker/DO Relay，插件留到后续。** 默认公开免费、免注册并设资源配额，同时支持开源自建；两端支持 macOS（Apple Silicon、Intel）和 Linux（x86_64、arm64）。本轮确认与工程待决项见 [REQUIREMENTS.md](REQUIREMENTS.md)，以其中已确认的要求为准。
+This document preserves the earlier architecture discussion. For current commands,
+implementation status and acceptance limits, use [README](README.md) and
+[release readiness](docs/release-readiness.md).
 
-> 2026-10-10 修正：设备通过同一 CLI 既可发布也可连接；一台设备可同时发布多个实例，连接时选择设备和实例；每个实例同时最多一个活动 Relay 客户端。后来的连接返回 TARGET_BUSY，不抢占；多台设备可获授权并先后使用，不同实例可并行。见 [ADR-0012](docs/adr/0012-single-active-client-per-target.md)。
+> 2026-10-09 需求访谈更新：**第一版交付可用 Rust CLI 与 TypeScript Cloudflare Worker/DO Relay，插件留到后续。** 默认公开免费、免注册并设资源配额，同时支持开源自建；两端支持 macOS（Apple Silicon、Intel）和 Linux（x86_64、arm64）。本轮确认与工程待决项见 [GitHub Issues](https://github.com/hackerchai/herdr-relay/issues)，以其中已确认的要求为准。
+
+> 2026-10-10 修正：设备通过同一 CLI 既可发布也可连接；一台设备可同时发布多个实例，连接时选择设备和实例；每个实例同时最多一个活动 Relay 客户端。后来的连接返回 TARGET_BUSY，不抢占；多台设备可获授权并先后使用，不同实例可并行。见 [exclusive target access](README.md#persistent-shared-targets)。
 
 > 授权范围已更新：按设备授权访问发布方当前与以后新增的所有已共享实例；两个方向分别授权。未共享实例仍不可访问，撤销设备应结束它对本机所有共享实例的连接。
 
@@ -10,9 +14,9 @@
 
 > 恢复规则已更新：同一已配置 session 重启后自动恢复共享并沿用有效设备授权；网络中断后自动重新 attach，使用新通道，断线期间不缓存或重放输入。CLI 仍不负责启动 Herdr。
 
-更新日期：2026-10-10。状态：核心产品范围和语言选型已确认；已有 Rust/TypeScript 实现、受控 Cloudflare 部署及四平台候选包。完整 GUI、全链路资源及公开发布验收仍未完成，当前证据见[候选记录](docs/validation/2026-10-10-candidates.md)。
+更新日期：2026-10-10。状态：核心产品范围和语言选型已确认；已有 Rust/TypeScript 实现、受控 Cloudflare 部署及四平台候选包。完整 GUI、全链路资源及公开发布验收仍未完成，当前证据见[release readiness](docs/release-readiness.md)。
 
-后续证据与实现见[本机兼容性报告](docs/herdr-compatibility.md)、[实施方案](docs/implementation-plan.md)、[协议](protocol/README.md)。下面保留总体设计及历史候选方案；实际 CLI 和工程默认值以实施方案、README 与候选记录为准，不能将历史建议视为当前实现或发布承诺。
+后续证据与实现见[native compatibility probe](README.md#isolated-upstream-compatibility-probe)、[manual acceptance checklist](docs/manual-acceptance.md)、[协议](protocol/README.md)。下面保留总体设计及历史候选方案；实际 CLI 和工程默认值以实施方案、README 与候选记录为准，不能将历史建议视为当前实现或发布承诺。
 
 ## 已确认的方向
 
@@ -64,7 +68,7 @@ TypeScript 用于云端，减少 Workers 平台接口与构建工具之间的适
 
 首版支持每台设备同时发布多个 Herdr 实例，客户端选择设备和实例连接；每个实例可授权多台设备，但同时只接受一个活动 Relay 客户端。同一 Rust CLI 可承担发布或连接角色。DO 按逻辑共享目标的稳定标识组织房间，不依赖某次 Herdr 进程的生命周期；同一实例只允许一个待建立或活动的 attach 占用，主机与 Room DO 都执行独占检查；单次连接使用独立 ID 与代次，后来的连接报忙，重连不能替换有效连接。只有旧通道停止且旧代次失效后才释放占用；重复 session 配置或别名不能绕过限制。不同共享目标分别管理，停止一个实例的共享不影响其他目标。房间标识不承担身份认证。主机离线时明确返回离线，不缓存待执行的键盘输入。
 
-本机探针已验证两个独立 native protocol 端点的接入、输入、surface 更新和断开隔离。每次远程 attach 因而采用独立的主机 client socket 与加密通道；同一 tab 的 PTY 尺寸沿用 Herdr 活动/焦点规则，不承诺每客户端独立尺寸。这些上游能力不改变产品的独占要求；多目标并行和竞争报忙已有候选记录，实际 GUI 与完整故障组合仍需补全，见 [ADR-0010](docs/adr/0010-independent-native-client-channels.md) 与 [ADR-0012](docs/adr/0012-single-active-client-per-target.md)。
+本机探针已验证两个独立 native protocol 端点的接入、输入、surface 更新和断开隔离。每次远程 attach 因而采用独立的主机 client socket 与加密通道；同一 tab 的 PTY 尺寸沿用 Herdr 活动/焦点规则，不承诺每客户端独立尺寸。这些上游能力不改变产品的独占要求；多目标并行和竞争报忙已有候选记录，实际 GUI 与完整故障组合仍需补全，见 [native-client bridge](README.md#local-native-client-bridge) 与 [exclusive target access](README.md#persistent-shared-targets)。
 
 ## Herdr 适配与生命周期
 
@@ -84,11 +88,11 @@ TS DO 使用接受入站 WebSocket 的 Hibernation API；连接身份、角色�
 
 ## 配对、加密与授权
 
-已确认的首版流程是发布方生成一次性配对串，另一端导入并完成身份验证与兑换后保存设备授权，无需发布方再次确认。兑换时发布方 Relay 后台服务须在线，Herdr 可以离线；发布方服务离线时不能宣告配对成功。该授权覆盖发布方当前与未来全部已共享实例，两个方向分别授予。配对串需要限制使用次数和有效期，并将兑换结果绑定到设备身份。Rust 端自动生成并保管私钥，用户无需手工维护 SSH 密钥。当前实现使用 rustls TLS 1.3、设备公钥固定与原子配对事务；验证证据和边界见 [ADR-0011](docs/adr/0011-endpoint-tls-and-pairing.md)。
+已确认的首版流程是发布方生成一次性配对串，另一端导入并完成身份验证与兑换后保存设备授权，无需发布方再次确认。兑换时发布方 Relay 后台服务须在线，Herdr 可以离线；发布方服务离线时不能宣告配对成功。该授权覆盖发布方当前与未来全部已共享实例，两个方向分别授予。配对串需要限制使用次数和有效期，并将兑换结果绑定到设备身份。Rust 端自动生成并保管私钥，用户无需手工维护 SSH 密钥。当前实现使用 rustls TLS 1.3、设备公钥固定与原子配对事务；验证证据和边界见 [device identity and TLS](README.md#device-identity-and-local-encrypted-diagnostic)。
 
-Relay 接入凭据只决定能否进入云端连接路由；访问 Herdr 的授权由发布方验证。两层都要校验连接角色和有效期。A 撤销 B 时，关闭 B 对 A 全部共享目标的活动通道并拒绝后续接入，云端作废相应作用域内的凭据和连接；B 曾独立授予 A 的反向权限以及其他设备的连接保持有效。当前实现先本地持久化并关闭受影响通道，再同步云端，具体证据见[撤销记录](docs/validation/2026-10-10-revocation.md)。不能把普通 token 配对等同于端到端身份验证。
+Relay 接入凭据只决定能否进入云端连接路由；访问 Herdr 的授权由发布方验证。两层都要校验连接角色和有效期。A 撤销 B 时，关闭 B 对 A 全部共享目标的活动通道并拒绝后续接入，云端作废相应作用域内的凭据和连接；B 曾独立授予 A 的反向权限以及其他设备的连接保持有效。当前实现先本地持久化并关闭受影响通道，再同步云端，具体证据见[revocation behavior](README.md#revoke-a-paired-device)。不能把普通 token 配对等同于端到端身份验证。
 
-Worker/DO 不持有设备私钥或会话解密密钥。云端仍可见路由标识、连接时间和消息大小等元数据。首版设备授权提供发布方全部已共享实例的操作权限；只读、单 pane 和命令级权限需要 Herdr 或端点支持，不由密文 Relay 承诺。默认服务公开免费且有资源配额，工程准入、限流与配额已有实现及[受控记录](docs/validation/2026-10-10-admission.md)，生产设置仍待 #19；免费不意味着无限资源。
+Worker/DO 不持有设备私钥或会话解密密钥。云端仍可见路由标识、连接时间和消息大小等元数据。首版设备授权提供发布方全部已共享实例的操作权限；只读、单 pane 和命令级权限需要 Herdr 或端点支持，不由密文 Relay 承诺。默认服务公开免费且有资源配额，工程准入、限流与配额已有实现及[operations guide](docs/operations.md)，生产设置仍待 #19；免费不意味着无限资源。
 
 ## 代码组织与实施顺序
 
@@ -106,14 +110,12 @@ docs/                 安装、运维及 Herdr 兼容性说明
 1. **P0 验证本机适配。** 在已通过的协议探针基础上，用 Rust 完成既有 socket 接入和真实 native client 启动；验证多实例、单实例独占、输入与 resize、session 重启及退出行为。
 2. **P1 完成设备信任与协议。** 实现配对事务、端到端 TLS、公钥固定、主机授权、密钥存储、撤销及跨语言协议样例，通过安全负例。
 3. **P2 接入 TS Relay。** 在受控 Cloudflare 环境验证已认证且端到端加密的双端 WSS、有界流控、DO 休眠、配额与断线重新 attach。
-4. **P3–P4 完成首版交付。** 完成四平台二进制、用户服务、CLI 与自建说明；验证升级、跨平台连接、默认服务运营配置和限额，再发布。完整退出条件见[实施方案](docs/implementation-plan.md)，薄插件留到后续版本。
+4. **P3–P4 完成首版交付。** 完成四平台二进制、用户服务、CLI 与自建说明；验证升级、跨平台连接、默认服务运营配置和限额，再发布。完整退出条件见[manual acceptance checklist](docs/manual-acceptance.md)，薄插件留到后续版本。
 
-验收覆盖输入、resize、Unicode、粘贴和图像能力；多实例目标选择正确；同实例独占与忙碌拒绝、不同实例并行；不兼容版本清晰失败；持续输出与慢端流控；空闲唤醒；网络中断后自动恢复且无输入重放；已配置 session 重启自动恢复共享并沿用有效设备授权；显式停用和设备撤销不被自动恢复绕过；客户端退出后远端 Herdr 和 agent 继续运行。完整产品验收仍待完成；已测范围、实际环境和未完成项集中记录于[候选报告](docs/validation/2026-10-10-candidates.md)。
+验收覆盖输入、resize、Unicode、粘贴和图像能力；多实例目标选择正确；同实例独占与忙碌拒绝、不同实例并行；不兼容版本清晰失败；持续输出与慢端流控；空闲唤醒；网络中断后自动恢复且无输入重放；已配置 session 重启自动恢复共享并沿用有效设备授权；显式停用和设备撤销不被自动恢复绕过；客户端退出后远端 Herdr 和 agent 继续运行。完整产品验收仍待完成；已测范围、实际环境和未完成项集中记录于[release readiness](docs/release-readiness.md)。
 
 ## 参考项目与范围
 
 Pairfob 提供薄插件与独立 daemon 包装参考；Paseo 提供控制/数据连接及端点加密参考；Agenvo 提供设备准入、连接代次和后端实例生命周期参考。借鉴各自适合的实现，不合并它们的产品层，也不引入 MCP。
 
 第一版建议只支持 Cloudflare Relay，不同时实现 VPS 后端、OAuth、P2P、通用 runtime adapter 或任务编排。Cloudflare Tunnel 与全 Rust Worker 保留为历史调研选项，不属于本次选定的实现路径。
-
-前期证据：[原始方案调研](RESEARCH.md)。原稿还引用 `../work/herdr-relay-plugin-feasibility.md`、`../work/paseo-relay-server-research.md` 和 `../work/agenvo-research.md`；这些文件不在当前仓库中，不作为已读取的补充证据。实现方向以本文及 REQUIREMENTS.md 中后续已确认的要求为准。

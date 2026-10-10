@@ -4,7 +4,7 @@ Use this checklist for each candidate source manifest, on both a controlled
 hosted Relay and a separately configured self-hosted Relay. It is a manual
 regression entry point, not an e2e suite. Record actual observations; leave
 unavailable combinations pending rather than copying a result from another OS.
-The current run is [2026-10-10](validation/2026-10-10-candidates.md).
+Keep dated run records locally, outside the tracked documentation.
 
 ## Record the environment
 
@@ -96,7 +96,7 @@ each fault. Operate only the dedicated process/socket; never kill by broad name.
 6. Suspend only one connector while its pane produces bounded test output.
    Operate another target throughout. Record credit pressure and RSS for Relay,
    Herdr and runtime processes. The stalled channel must close after no progress;
-   pong must not extend credit. See the [flow-control reproduction](validation/2026-10-10-flow-control.md).
+   pong must not extend credit. See the [flow-control protocol](../protocol/access-v1.md).
 7. Leave active channels idle for more than 120 seconds. Confirm hibernation
    through Worker metrics/status, then operate both targets and repeat competing
    attach/release. An expired or stale reservation must not gain capacity.
@@ -124,7 +124,7 @@ existing connections and recovered capacity after release/expiry. Reconstruct
 objects/configuration without resetting their stored counters. With admission
 off, inspect signed operator status and verify active routes close. Restore the
 same namespace/configuration and existing local grants. See
-[admission results](validation/2026-10-10-admission.md) and [operations](operations.md).
+[operations guide](operations.md).
 
 Preserve the previous candidate archive and sanitized configuration. Roll back
 by stopping the user service, installing that verified binary, reinstalling its

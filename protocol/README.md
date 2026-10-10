@@ -1,6 +1,6 @@
 # Relay 协议 v1 草案
 
-日期：2026-10-09。状态：**用于实现原型的设计草案，尚未冻结 wire compatibility**。产品约束来自 [需求](../REQUIREMENTS.md)，端点认证方案见 [ADR-0011](../docs/adr/0011-endpoint-tls-and-pairing.md)。签名消息编码、证书 profile 和跨语言样例必须在 P1 完成后才能发布协议 v1。
+日期：2026-10-09。状态：**用于实现原型的设计草案，尚未冻结 wire compatibility**。产品约束来自 [GitHub Issues](https://github.com/hackerchai/herdr-relay/issues)，端点认证方案见 [device identity and TLS](../README.md#device-identity-and-local-encrypted-diagnostic)。签名消息编码、证书 profile 和跨语言样例必须在 P1 完成后才能发布协议 v1。
 
 ## 三层边界
 
@@ -92,7 +92,7 @@ DATA 的 offset 必须恰好等于该方向下一预期位置；长度必须与�
 - 每方向初始窗口建议 256 KiB；始终满足 `sent - consumed <= window`。握手阶段同样计入窗口，并额外限制握手总量与时间。
 - 接收端只有在密文已被 TLS 处理、对应明文已交给下游或占用明确的有界缓冲后才能前移 CREDIT。窗口不能仅因为调用了 WebSocket `send()` 就恢复。
 - CREDIT 不受 DATA 窗口阻塞，避免双方等窗口死锁；合并发送并单独限频。对足够小的低速流也应及时回 credit，不能一直等待固定批量阈值。
-- Rust 同时限制读入、TLS、明文、待发送以及 daemon 总缓冲；耗尽预算即暂停上游读取。持续无法取得进展时关闭慢通道。目标进程中的 Herdr 队列另需验证，见[兼容性报告](../docs/herdr-compatibility.md)。
+- Rust 同时限制读入、TLS、明文、待发送以及 daemon 总缓冲；耗尽预算即暂停上游读取。持续无法取得进展时关闭慢通道。目标进程中的 Herdr 队列另需验证，见[Herdr compatibility patch](../patches/herdr/README.md)。
 - Room DO 不保留应用数据队列：已配对则检查窗口并转发，未配对则拒绝。接收端信用、帧尺寸、消息速率与连接配额共同限制平台发送缓冲的压力；真实平台队列仍需压测。
 - 使用 `acceptWebSocket`，由 attachment 保存绑定身份、角色、channel ID、代次、offset、窗口和限速状态；发送前先记账。休眠唤醒后从连接重建路由，缺失/冲突时保守关闭，不重放数据。
 - 票据消费、预留和撤销版本需要可持久恢复；不能只放 attachment，因为连接关闭会失去 attachment。恢复出来的额度不应凭内存归零。

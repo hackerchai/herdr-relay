@@ -43,8 +43,8 @@ two-profile workflow without `--relay-local-url`. Set `ADMISSION_ENABLED` to
 `false` and redeploy to reject new admission requests.
 
 The checked-in development configuration is not a published default service.
-See [wire details](../protocol/access-v1.md) and
-[local validation](../docs/validation/2026-10-10-cloudflare-pairing.md).
+See [wire details](../protocol/access-v1.md) and the
+[manual acceptance checklist](../docs/manual-acceptance.md).
 
 To publish native targets, use `share add --name Work --session work` (or an
 explicit `--socket`) and then `serve --relay`. Use the root README's `targets` and `connect` commands on the paired
