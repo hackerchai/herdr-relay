@@ -10,7 +10,7 @@ Conventional commits feed Release Please after a successful main-branch CI run.
 Its PR updates Cargo manifests/lockfile, the Worker package/lockfile, changelog
 and release manifest together. Because GitHub suppresses ordinary events created
 with `GITHUB_TOKEN`, the release workflow explicitly dispatches CI on the bot PR
-branch. Required checks therefore also apply to release PRs.
+branch. The same checks therefore also run on release PRs.
 
 Merging a version PR creates a `vX.Y.Z` release and invokes `Publish` in the same
 workflow. Publication validates the tag, main ancestry and synchronized versions,
@@ -37,8 +37,12 @@ Repository Secrets:
 
 The Cloudflare token has no billing-write permission. It is scoped to the existing
 account and `hackerchai.com` zone; the Global API Key is not placed in CI.
-Keep repository visibility private. `production` is the deployment environment;
-there is no added manual approval step.
+Keep repository visibility private. Publication uses repository Secrets and adds
+no manual approval step. GitHub rejected branch protection for this private
+repository on its current plan (403: GitHub Pro required). `CI Required` reports
+all checks, and Publish enforces their success, but GitHub cannot enforce the
+ordinary PR merge gate on this plan. Do not change visibility or buy a plan
+automatically.
 
 ## Recovery
 

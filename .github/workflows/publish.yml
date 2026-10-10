@@ -122,7 +122,6 @@ jobs:
   publish:
     needs: [validate, checks, binaries]
     runs-on: ubuntu-24.04
-    environment: production
     timeout-minutes: 20
     permissions:
       contents: write
