@@ -233,3 +233,10 @@ Q3 已确认 Herdr 薄插件推迟到后续版本，首版不验收插件菜单�
 The maintainer requested a hostname-first workflow: `serve` discovers and multi-selects local Herdr sessions, initializes state, and installs/starts the service; `pair` consumes one pasted link; bare `herdr-relay` and `connect` open the same host/session browser. Everyday operation requires no device or target IDs. TUI help and the existing service administration commands remain available. macOS and Linux support server autostart; GitHub Releases supply `update`. See [ADR-0014](docs/adr/0014-interactive-cli-and-server-lifecycle.md) and issues #33–#39.
 
 All new tickets, PRs, plans, and ADRs are written in English. Required validation remains focused unit tests and manual overall acceptance; no end-to-end test suite is added. Cloudflare protocol breaking changes are permitted for this release, but must be deployed and verified together with the matching client.
+
+## Public update channel confirmation
+
+The maintainer approved `hackerchai/herdr-relay-releases` as a public binary-only
+release repository on 2026-10-10. The source repository remains private and MIT
+crates.io publication continues. Default CLI updates require no GitHub login.
+See [ADR-0015](docs/adr/0015-public-binary-release-channel.md).

@@ -8,8 +8,10 @@ curl -fsSL https://herdr.dev/install.sh | sh
 cargo install herdr-relay --locked
 ```
 
-Ensure the installed executables are on PATH. GitHub binary archives are private
-and available to repository members; the public crate needs no GitHub account.
+Ensure the installed executables are on PATH. Alternatively, download a native
+archive from the [public releases](https://github.com/hackerchai/herdr-relay-releases/releases/latest),
+verify its checksum, extract it, and run `./install.sh`. Binary installation needs
+neither Rust nor Node. No GitHub account is required.
 
 ## On the computer you want to access
 
@@ -89,17 +91,15 @@ and keep it after logout with `herdr-relay service autostart boot`, which may ne
 system authorization. Relay does not create Herdr sessions on reboot; once the
 same Herdr session starts again, saved sharing resumes.
 
-GitHub updates require access to the private release repository, using your own
-`gh auth login` session or `GH_TOKEN`. Without that access, update from crates.io:
+Updates use the public binary repository without GitHub authentication.
+Source installations can also update from crates.io:
 
 ```sh
 cargo install herdr-relay --locked --force
 ```
 
 The GitHub updater also checks the separately installed service executable, even
-when the CLI is already current. After a crates.io upgrade without private GitHub
-access, reinstall the service with `service stop`, `service install --start-at-login`,
-and `service start` (omit the login flag if you want autostart disabled).
+when the CLI is already current, including after a crates.io upgrade.
 An active session defers its activation; stop/start the service when convenient,
 or use `herdr-relay update --restart-service` to allow an immediate disconnect.
 Updating Relay does not update Herdr, Codex, or Claude Code.

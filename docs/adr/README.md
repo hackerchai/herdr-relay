@@ -20,4 +20,6 @@
 
 | [ADR-0014](0014-interactive-cli-and-server-lifecycle.md) | Interactive CLI, named hosts, pairing links, server autostart and release updates | 2026-10-10 maintainer request |
 
+| [ADR-0015](0015-public-binary-release-channel.md) | Public binary releases and anonymous updates; private source repository retained | 2026-10-10 maintainer confirmation |
+
 完整范围和验收见 [REQUIREMENTS.md](../../REQUIREMENTS.md)，术语见 [CONTEXT.md](../../CONTEXT.md)。

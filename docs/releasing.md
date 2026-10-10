@@ -36,13 +36,15 @@ Repository Secrets:
 
 | Name | Use |
 | --- | --- |
+| `RELEASES_GITHUB_TOKEN` | Publish to `hackerchai/herdr-relay-releases`; minimum Contents: write on that repository |
 | `CARGO_REGISTRY_TOKEN` | Publish `herdr-relay` to crates.io |
 | `CLOUDFLARE_API_TOKEN` | Scoped Workers deploy, zone routes and billing read |
 | `CLOUDFLARE_ACCOUNT_ID` | Deployment account |
 
 The Cloudflare token has no billing-write permission. It is scoped to the existing
 account and `hackerchai.com` zone; the Global API Key is not placed in CI.
-Keep repository visibility private. Publication uses repository Secrets and adds
+Keep the source repository private; the separate binary repository is public.
+Publication uses repository Secrets and adds
 no manual approval step. GitHub rejected branch protection for this private
 repository on its current plan (403: GitHub Pro required). `CI Required` reports
 all checks, and Publish enforces their success, but GitHub cannot enforce the
@@ -63,3 +65,21 @@ Restore only after checking the cause. An already published crate cannot be
 overwritten; ship a patch version (or explicitly yank a defective version after
 review). Local private profiles remain authoritative and should be backed up
 without copying them into this repository.
+
+## Public binary channel
+
+After the crate and production probe succeed, Publish generates the versioned
+readiness manifest and invokes `scripts/publish-public-release.py`. It selects
+only the four CLI archives named by that manifest and their validated checksums,
+plus LICENSE. It uploads into a draft release, uploads the manifest last, then
+publishes the draft. The tag belongs to the public documentation repository.
+Private source archives, accompanying Herdr builds, development history and CI
+logs stay outside the public binary repository. Completed public releases are
+not overwritten by retries. A failed draft can be retried with the same tag.
+
+`RELEASES_GITHUB_TOKEN` must belong to a publisher with Contents: write on the
+public distribution repository. A fine-grained repository-scoped token or GitHub
+App credential is sufficient; the source repository's built-in GITHUB_TOKEN
+cannot publish across repositories. Store the credential as a source repository
+secret, never in an artifact or the public repository. The current bootstrap uses
+the maintainer's existing GitHub CLI credential in that encrypted secret.

@@ -15,7 +15,7 @@ use std::{
 
 const LIMIT: usize = 128 * 1024 * 1024;
 const MANIFEST: &str = "herdr-relay-update.json";
-const REPOSITORY: &str = "hackerchai/herdr-relay";
+const REPOSITORY: &str = "hackerchai/herdr-relay-releases";
 
 #[derive(Deserialize)]
 struct Asset {
@@ -69,12 +69,19 @@ struct GitHub {
     token: Option<String>,
 }
 impl GitHub {
-    async fn new() -> Result<Self> {
-        let mut token = std::env::var("GH_TOKEN")
-            .ok()
-            .or_else(|| std::env::var("GITHUB_TOKEN").ok())
-            .filter(|s| !s.is_empty());
-        if token.is_none()
+    async fn new(authenticated: bool) -> Result<Self> {
+        // The default public channel never needs a GitHub login. In particular,
+        // an unrelated expired credential must not break ordinary updates.
+        let mut token = authenticated
+            .then(|| {
+                std::env::var("GH_TOKEN")
+                    .ok()
+                    .or_else(|| std::env::var("GITHUB_TOKEN").ok())
+                    .filter(|s| !s.is_empty())
+            })
+            .flatten();
+        if authenticated
+            && token.is_none()
             && let Ok(Ok(output)) = tokio::time::timeout(
                 Duration::from_secs(5),
                 tokio::process::Command::new("gh")
@@ -185,7 +192,7 @@ pub async fn run(
             "use a GitHub owner/repository name",
         ));
     }
-    let github = GitHub::new().await?;
+    let github = GitHub::new(repository != REPOSITORY).await?;
     println!("Checking GitHub Releases ({repository})…");
     let bytes = github
         .get(
