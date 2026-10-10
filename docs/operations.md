@@ -1,9 +1,16 @@
 # Controlled Relay operations
 
-This is the engineering configuration for #17, not a public service budget or
-SLA. The domain, account owner, alert recipients, license and production
-retention/budget decisions remain in #19. Do not enable public admission before
-those decisions and #18 acceptance are complete.
+Production uses `herdr-relay.hackerchai.com` in the maintainer's Cloudflare account.
+[ADR-0013](adr/0013-private-repository-public-crate.md) fixes the private repository,
+MIT/public crate distribution, USD 10 monthly ceiling and best-effort user-service
+scope. Production overrides are in `relay/wrangler.production.jsonc`; the table
+below gives general self-host defaults.
+
+Workers/SQLite DO remain on Free: exhaustion rejects requests rather than buying
+paid overages. Deployment checks reject a Workers/DO paid subscription. Account
+budget alerts at USD 5, 8 and 10 are enabled for `dns_manage@hackerchai.com`.
+These alerts include other account products and do not themselves stop spending.
+Application payload logging remains disabled and offline mirror retention is 25h.
 
 ## Global coordination
 

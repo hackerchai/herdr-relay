@@ -12,6 +12,8 @@ metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--format-ve
 version = metadata['packages'][0]['version']
 name = f'herdr-relay-{version}-source'
 files = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+if not any(files):
+    raise SystemExit('No tracked sources to package.')
 output = ROOT / 'target' / 'packages'
 output.mkdir(parents=True, exist_ok=True)
 archive = output / f'{name}.tar.gz'
