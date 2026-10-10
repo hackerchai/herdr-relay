@@ -6,9 +6,10 @@ accountless pairing, multiple shared targets, exclusive instance access,
 revocation, reconnect and background user services. The default endpoint is
 `https://herdr-relay.hackerchai.com`; use `--origin` to select a self-hosted Relay.
 
-The project uses MIT licensing. GitHub stays private; the public crates.io package
-contains CLI and Worker source plus self-host materials. Four-platform binary
-assets are available to repository members. [Release readiness](docs/release-readiness.md)
+The project uses MIT licensing. The source repository stays private; the public crates.io package
+contains CLI and Worker source plus self-host materials. Four-platform binaries
+and anonymous updates are available from the
+[public release repository](https://github.com/hackerchai/herdr-relay-releases/releases). [Release readiness](docs/release-readiness.md)
 records publication and acceptance evidence.
 
 Install the latest [public crates.io release](https://crates.io/crates/herdr-relay)
@@ -81,9 +82,9 @@ and continued operation after logout, subject to the system's authorization
 policy. macOS autostart runs at user login. Neither mode starts Herdr itself.
 
 `update` checks complete stable GitHub Releases, verifies the selected archive,
-and updates the CLI and installed server. Private releases require your own
-GitHub access (`gh auth login` or `GH_TOKEN`). Users without repository access can
-upgrade from the public crate with `cargo install herdr-relay --locked --force`.
+and updates the CLI and installed server. The default public release channel
+requires no GitHub login. Source installations can also use
+`cargo install herdr-relay --locked --force`.
 Active sessions defer the server restart; `update --restart-service` explicitly
 allows disconnecting them. See the [simple walkthrough](docs/quickstart.md).
 
