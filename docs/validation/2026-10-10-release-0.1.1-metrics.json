@@ -1,0 +1,104 @@
+{
+  "version": "0.1.1",
+  "source_commit": "aff7fdd85cf3a7039ef68db55a2132f0c4e60241",
+  "release_workflow": "https://github.com/hackerchai/herdr-relay/actions/runs/38028537984",
+  "release_attempt": 3,
+  "release_conclusion": "success",
+  "registry": {
+    "num": "0.1.1",
+    "license": "MIT",
+    "checksum": "c72e3e7912f2f3e077d9af8e5f24336698eb9bd53587d09cac8aef0c9d6db734",
+    "rust_version": "1.99",
+    "created_at": "2026-10-10T06:11:47.172783Z",
+    "yanked": false,
+    "owners": [
+      "hackerchai"
+    ]
+  },
+  "test_counts": {
+    "rust-linux": 40,
+    "rust-macos": 40,
+    "upstream-queue": 32,
+    "typescript": 7
+  },
+  "native_builds": {
+    "macos-arm": {
+      "job_id": 114147602786,
+      "cli_runtime_version_passed": true,
+      "bounded_native_runtime_version_passed": true
+    },
+    "macos-intel": {
+      "job_id": 114145357625,
+      "cli_runtime_version_passed": true,
+      "bounded_native_runtime_version_passed": true
+    },
+    "linux-arm": {
+      "job_id": 114145357648,
+      "cli_runtime_version_passed": true,
+      "bounded_native_runtime_version_passed": true
+    },
+    "linux-x86": {
+      "job_id": 114145357606,
+      "cli_runtime_version_passed": true,
+      "bounded_native_runtime_version_passed": true
+    }
+  },
+  "archives": {
+    "herdr-bounded-0.9.3-aarch64-apple-darwin.tar.gz": {
+      "sha256": "5c4b919f5feabf633706b87f791ea6a670af7d5846b05224ebb7f9795d69e69a",
+      "verified_manifest_files": 5
+    },
+    "herdr-bounded-0.9.3-aarch64-unknown-linux-musl.tar.gz": {
+      "sha256": "05376796f863f325f8bb34cdd31142a693a787512850b74befc0fc87e7b544b9",
+      "verified_manifest_files": 5
+    },
+    "herdr-bounded-0.9.3-x86_64-apple-darwin.tar.gz": {
+      "sha256": "f3eb88ca72748cc3a6b8a72730f7a1c172e12e99d4dc77b6465a1fd81d9778ad",
+      "verified_manifest_files": 5
+    },
+    "herdr-bounded-0.9.3-x86_64-unknown-linux-musl.tar.gz": {
+      "sha256": "8c97daa8386470c2890e7d496f3a378d239ae89cc313abdb144fcd91a6c42de3",
+      "verified_manifest_files": 5
+    },
+    "herdr-relay-0.1.1-aarch64-apple-darwin.tar.gz": {
+      "sha256": "f499d030f7b7bd43f059ff82f758ad7f166e1d35ce19de6c2634fcb481d86d05",
+      "verified_manifest_files": 8
+    },
+    "herdr-relay-0.1.1-aarch64-unknown-linux-musl.tar.gz": {
+      "sha256": "091eb05c1f07c9d22fe4ef0f256e4412a6fc9e07cb781b434558b75d450dc762",
+      "verified_manifest_files": 8
+    },
+    "herdr-relay-0.1.1-source.tar.gz": {
+      "sha256": "53802157eeb0f7804983c32cddc99f5582d52fc557415f138590419f82b1c488",
+      "verified_manifest_files": 145
+    },
+    "herdr-relay-0.1.1-x86_64-apple-darwin.tar.gz": {
+      "sha256": "d14e56d4f7a6f5a800a8ceacbdaa771a39c8d1e6beba4443258403a0037308c6",
+      "verified_manifest_files": 8
+    },
+    "herdr-relay-0.1.1-x86_64-unknown-linux-musl.tar.gz": {
+      "sha256": "bc37747d55b1ef7550208475191abea548c6a18f44d9f98e160a455bb327939b",
+      "verified_manifest_files": 8
+    }
+  },
+  "worker_version": "2fe7c8da-d54d-4d83-b4fa-f0fa6fb8d725",
+  "worker_traffic_percentage": 100,
+  "production_origin": "https://herdr-relay.hackerchai.com",
+  "production_tls_protocol_probe": true,
+  "public_registry_install": true,
+  "gui_acceptance": "maintainer confirmation; no new GUI tool run",
+  "production_manual_acceptance": {
+    "cli_version": "herdr-relay 0.1.1",
+    "source_commit": "aff7fdd85cf3a7039ef68db55a2132f0c4e60241",
+    "fresh_pairing": true,
+    "PRODUCTION_NATIVE_中文": true,
+    "same_target_busy": true,
+    "PRODUCTION_BUSY_HOLDER_SURVIVED": true,
+    "terminal_restored": true,
+    "PRODUCTION_FRESH_RECONNECT": true,
+    "revocation_seconds": 2.43,
+    "revoked_discovery_denied": true,
+    "PRODUCTION_REPAIRED": true,
+    "native_server_survived": true
+  }
+}

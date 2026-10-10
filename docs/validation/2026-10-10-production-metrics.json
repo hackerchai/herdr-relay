@@ -42,5 +42,20 @@
     },
     "retry_after_seconds": "60",
     "cli_rate_limit_feedback": "RATE_LIMITED: relay rejected the request"
-  }
+  },
+  "released_registry_cli": {
+    "cli_version": "herdr-relay 0.1.1",
+    "source_commit": "aff7fdd85cf3a7039ef68db55a2132f0c4e60241",
+    "fresh_pairing": true,
+    "PRODUCTION_NATIVE_中文": true,
+    "same_target_busy": true,
+    "PRODUCTION_BUSY_HOLDER_SURVIVED": true,
+    "terminal_restored": true,
+    "PRODUCTION_FRESH_RECONNECT": true,
+    "revocation_seconds": 2.43,
+    "revoked_discovery_denied": true,
+    "PRODUCTION_REPAIRED": true,
+    "native_server_survived": true
+  },
+  "released_worker_version": "2fe7c8da-d54d-4d83-b4fa-f0fa6fb8d725"
 }

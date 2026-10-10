@@ -7,6 +7,17 @@ The initial domain exercise used commit `2d0b7c7` (bootstrap version `0.0.0`) an
 the pinned custom Herdr `0.9.3-custom.relay-control-bound-1`; it does not claim to
 be the subsequently versioned public crate.
 
+The completed [0.1.1 release](2026-10-10-release-0.1.1.md) subsequently deployed
+Worker version `2fe7c8da-d54d-4d83-b4fa-f0fa6fb8d725` at 100% traffic. The CLI was
+installed directly from public crates.io into an isolated local directory, and
+the native server/client came from the verified macOS arm64 GitHub release
+archive. With fresh private profiles, that combination passed pairing, discovery,
+Unicode native input, same-target busy rejection while preserving the holder,
+manual reconnect, revocation in 2.430 seconds, rejected access after revocation
+and fresh pairing. Terminal attributes were checked after each native exit;
+Herdr survived teardown. These are actual release-artifact results on macOS 27
+arm64, not a relabelling of the bootstrap run or new GUI testing.
+
 Fresh private profiles completed invitation redemption, encrypted discovery,
 native Unicode input, same-target `TARGET_BUSY` without disrupting the holder,
 manual reconnect, revocation, denied discovery after revocation and fresh pairing.
