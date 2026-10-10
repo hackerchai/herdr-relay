@@ -110,6 +110,8 @@ jobs:
         run: |
           scripts/package.sh "$TARGET"
           scripts/build-herdr.sh package "$TARGET"
+          "target/$TARGET/release/herdr-relay" --version
+          "target/upstream/herdr/target/$TARGET/release/herdr" --version
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: binaries-${{ matrix.target }}

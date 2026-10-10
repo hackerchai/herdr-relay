@@ -23,9 +23,9 @@ is made solely from successful compilation.
 Check the `.tar.gz` against its adjacent checksum from the same trusted source:
 
 ```sh
-shasum -a 256 -c herdr-relay-0.1.0-aarch64-apple-darwin.tar.gz.sha256
-tar -xzf herdr-relay-0.1.0-aarch64-apple-darwin.tar.gz
-cd herdr-relay-0.1.0-aarch64-apple-darwin
+shasum -a 256 -c herdr-relay-0.1.1-aarch64-apple-darwin.tar.gz.sha256
+tar -xzf herdr-relay-0.1.1-aarch64-apple-darwin.tar.gz
+cd herdr-relay-0.1.1-aarch64-apple-darwin
 ./install.sh
 ```
 
