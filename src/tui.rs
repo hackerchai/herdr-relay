@@ -29,6 +29,7 @@ pub enum Choice {
 }
 pub struct Screen {
     terminal: DefaultTerminal,
+    interrupt: tokio::signal::unix::Signal,
     terminate: tokio::signal::unix::Signal,
     hangup: tokio::signal::unix::Signal,
 }
@@ -40,6 +41,8 @@ impl Screen {
                 "open a terminal for interactive setup; use --help for explicit commands and daemon for foreground service operation",
             ));
         }
+        let interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .map_err(io_error)?;
         let terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .map_err(io_error)?;
         let hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
@@ -47,6 +50,7 @@ impl Screen {
         let terminal = ratatui::try_init().map_err(io_error)?;
         let screen = Self {
             terminal,
+            interrupt,
             terminate,
             hangup,
         };
@@ -136,6 +140,7 @@ impl Screen {
                 return Ok(event);
             }
             tokio::select! {
+                _ = self.interrupt.recv() => return Err(cancelled()),
                 _ = self.terminate.recv() => return Err(cancelled()),
                 _ = self.hangup.recv() => return Err(cancelled()),
                 _ = tokio::time::sleep(Duration::from_millis(30)) => {},
@@ -310,7 +315,7 @@ impl Screen {
             tokio::select! {
                 result = &mut future => return result,
                 event = self.event() => {
-                    if matches!(event?, Event::Key(KeyEvent { code: KeyCode::Esc, .. })) { return Err(cancelled()); }
+                    if matches!(event?, Event::Key(KeyEvent { code: KeyCode::Esc, .. })) { return Err(Error::new("BACK", "cancelled")); }
                 },
             }
         }

@@ -173,6 +173,7 @@ pub async fn serve(profile: &Path, origin: &str, config: &Path) -> Result<()> {
                 }
                 return Ok(());
             }
+            Err(e) if e.code == "BACK" => return Ok(()),
             Err(e) if e.code == "CANCELLED" => return Err(e),
             Err(e) => {
                 screen
@@ -272,6 +273,7 @@ async fn pair_in(screen: &mut Screen, profile: &Path) -> Result<Option<(String, 
                 screen.message("Paired", &format!("You can now access {alias}.\nChoose a shared session next. Reverse access is not granted.")).await?;
                 return Ok(Some((origin, identity)));
             }
+            Err(e) if e.code == "BACK" => continue,
             Err(e) if e.code == "CANCELLED" => return Err(e),
             Err(e) => screen.message("Could not pair", &e.to_string()).await?,
         }
@@ -408,7 +410,8 @@ pub async fn connect(
                 .await
             {
                 Ok(targets) => targets,
-                Err(e) if e.code == "CANCELLED" => break,
+                Err(e) if e.code == "BACK" => break,
+                Err(e) if e.code == "CANCELLED" => return Err(e),
                 Err(e) => {
                     screen
                         .message(
@@ -438,7 +441,8 @@ pub async fn connect(
                 Choice::Pick(index) => {
                     let target = &targets[index];
                     if target.status != "online" { screen.message("Session unavailable", "This session is offline or busy. Refresh after it becomes available.").await?; continue; }
-                    if let Err(e) = screen.wait("Checking Herdr client", crate::client::check_version(herdr)).await { screen.message("Herdr is required", &e.to_string()).await?; continue; }
+                    if let Err(e) = screen.wait("Checking Herdr client", crate::client::check_version(herdr)).await { if e.code == "BACK" { continue; }
+                    if e.code == "CANCELLED" { return Err(e); } screen.message("Herdr is required", &e.to_string()).await?; continue; }
                     // Stop rendering and release all input ownership before native attach.
                     drop(screen);
                     let result = crate::client::connect_remote(relay.clone(), &host.identity, &target.id, herdr, "herdr-relay").await;

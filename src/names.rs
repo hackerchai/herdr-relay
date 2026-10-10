@@ -203,10 +203,11 @@ pub fn remember(
             .iter()
             .any(|r| r.origin == origin && r.identity != identity && r.alias == record.alias)
         {
-            record.alias = format!(
-                "{} ({suffix})",
-                record.name.chars().take(96).collect::<String>()
-            );
+            let mut base = record.name.clone();
+            while base.len() > 96 {
+                base.pop();
+            }
+            record.alias = format!("{base} ({suffix})");
             suffix += 1;
         }
     }
@@ -301,6 +302,30 @@ mod tests {
             .is_err()
         );
         assert!(!valid_name("hello\x1b[2J"));
+        let unicode = "主".repeat(42);
+        remember(
+            temp.path(),
+            "https://example.com",
+            "c",
+            Some(&unicode),
+            None,
+        )
+        .unwrap();
+        let duplicate = remember(
+            temp.path(),
+            "https://example.com",
+            "d",
+            Some(&unicode),
+            None,
+        )
+        .unwrap();
+        assert!(valid_name(&duplicate.alias));
+        assert_eq!(
+            remember(temp.path(), "https://example.com", "d", None, None)
+                .unwrap()
+                .alias,
+            duplicate.alias
+        );
     }
     #[test]
     fn pairing_links_bind_origin_and_preserve_legacy_invitations() {

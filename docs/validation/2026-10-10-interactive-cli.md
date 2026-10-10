@@ -31,7 +31,9 @@ all interactive commands use their default profile without a `--profile` flag.
   A non-terminal invocation exited with `TERMINAL_REQUIRED` and explicit guidance.
 - Login autostart toggled off/on without changing paired grants or Herdr servers.
   Linux lingering was already enabled; repeated boot-mode setup is idempotent.
-- A deliberately failing pending service executable on macOS produced
+- Repeated native attach/detach/attach succeeded in both directions after the
+  regression fix; both sessions stayed online and second commands reached the host.
+- A deliberately failing pending service executable on both platforms produced
   `UPDATE_ACTIVATION` and automatically restored/restarted the previous service.
 
 ## Regression found during acceptance

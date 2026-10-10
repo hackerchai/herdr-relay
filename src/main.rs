@@ -343,6 +343,9 @@ enum IdentityAction {
 #[tokio::main]
 async fn main() {
     if let Err(error) = run(Cli::parse()).await {
+        if error.code == "BACK" {
+            return;
+        }
         eprintln!("{error}");
         std::process::exit(if error.code == "CANCELLED" { 130 } else { 1 });
     }
