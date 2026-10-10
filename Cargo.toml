@@ -9,7 +9,7 @@ homepage = "https://herdr-relay.hackerchai.com"
 readme = "README.md"
 keywords = ["terminal", "relay", "herdr", "cloudflare"]
 categories = ["command-line-utilities", "network-programming"]
-include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/README.md", "/docs/install.md", "/docs/self-hosting.md", "/protocol/**", "/relay/src/**", "/relay/test/**", "/relay/scripts/**", "/relay/package.json", "/relay/package-lock.json", "/relay/tsconfig.json", "/relay/wrangler.jsonc", "/patches/**", "/scripts/build-herdr.sh"]
+include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/README.md", "/docs/**", "/protocol/**", "/relay/src/**", "/relay/test/**", "/relay/scripts/**", "/relay/package.json", "/relay/package-lock.json", "/relay/tsconfig.json", "/relay/wrangler.jsonc", "/relay/eslint.config.js", "/relay/.prettierrc.json", "/relay/.prettierignore", "/patches/**", "/scripts/build-herdr.sh"]
 description = "An authenticated relay for native Herdr clients"
 
 [dependencies]

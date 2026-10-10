@@ -11,13 +11,13 @@ hostname is `herdr-relay.hackerchai.com`; the monthly project ceiling is USD 10.
 | GUI terminal acceptance | Passed by maintainer confirmation | Direct instruction on 2026-10-10; no new GUI tool run claimed |
 | Four candidate platforms | Prior candidates exercised | New release artifacts must be built from the CI release tag; Rosetta/VM limits remain documented |
 | Upstream reliable-control queue | Patch implemented; 32 transport tests pass | [Patch and build instructions](../patches/herdr/README.md); custom server required for this bound |
-| Rust/TypeScript checks | Local checks pass; CI configured | [Release workflow](releasing.md); actual hosted CI runs pending |
+| Rust/TypeScript and upstream checks | GitHub CI passed on Linux/macOS | [CI run](https://github.com/hackerchai/herdr-relay/actions/runs/38025620106); includes all 32 upstream transport regressions |
 | License and publication | MIT; private GitHub, public crate | Crate explicitly includes Worker source and patch materials |
-| Production Worker | Deployed; native acceptance in progress | Custom hostname and independent SQLite DO namespaces |
+| Production Worker | Deployed; fresh native acceptance passed | [Production checks and rollback](validation/2026-10-10-production.md) |
 | Budget | Retain Workers Free, below USD 10 | Provider rejects paid-only CPU setting with error 100328; CI rejects a paid Workers/DO subscription |
 | Retention | Existing defaults retained | 25-hour offline mirrors; [other TTLs](operations.md); no application payload logs |
 | Availability and service scope | Best effort; user services | No SLA, forced logout test or system service promise |
-| Public crate and release handoff | Pending | Fresh production pairing, rollback, all CI checks and actual registry publication remain required |
+| Public crate and release handoff | Pending | Production pairing and rollback passed; complete CI and actual registry publication remain required |
 
 Cloudflare resources remain in the maintainer's existing account. The operator
 identity is held in a private local profile; only its public device ID is in

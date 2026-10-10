@@ -8,8 +8,8 @@ revocation, reconnect and background user services. The default endpoint is
 
 The project uses MIT licensing. GitHub stays private; the public crates.io package
 contains CLI and Worker source plus self-host materials. Four-platform binary
-assets are available to repository members. Initial registry publication is in
-progress; [release readiness](docs/release-readiness.md) records actual status.
+assets are available to repository members. [Release readiness](docs/release-readiness.md)
+records publication and acceptance evidence.
 
 For the bounded native server, use the [Herdr 0.9.3 compatibility patch](patches/herdr/README.md).
 An unmodified upstream server still has its original unbounded control queue.
@@ -22,9 +22,9 @@ Requirements are in [REQUIREMENTS.md](REQUIREMENTS.md), decisions are in
 
 ## Development
 
-The current bootstrap was checked with Rust/Cargo 1.99.0 on macOS arm64. This is
-a development environment record, not a minimum supported version or a claim
-that the release platform matrix has passed.
+Building the CLI requires Rust/Cargo 1.99 or newer. Native release archives need
+neither Rust nor Node at runtime. Platform acceptance and its Rosetta/VM limits
+are recorded separately from CI build results.
 
 From the repository root:
 

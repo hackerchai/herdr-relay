@@ -1,7 +1,7 @@
 # Install Herdr Relay
 
 Public distribution uses crates.io; GitHub binary archives remain private.
-After the initial registry release, install the CLI with Rust 1.99 or newer:
+Install a published CLI release with Rust 1.99 or newer:
 
 ```sh
 cargo install herdr-relay --locked

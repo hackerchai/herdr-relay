@@ -1,7 +1,7 @@
 # Self-host Herdr Relay
 
 This runs the same Worker, device proof, pinned end-to-end TLS and native Herdr
-protocol as the development hosted endpoint. A Cloudflare account belongs to the
+protocol as the production hosted endpoint. A Cloudflare account belongs to the
 operator; connecting devices need no Cloudflare account or deployment credential.
 Worker source and these instructions are included in the public crate source
 archive. The GitHub repository remains private. The hosted deployment retains
