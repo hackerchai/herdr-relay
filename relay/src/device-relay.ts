@@ -33,6 +33,8 @@ type Control = {
   renewAt?: number;
   /** Optional capabilities the publisher advertised on its control upgrade. */
   features?: string[];
+  /** Verified proof key, kept only to pre-issue join challenges. */
+  public_key?: string;
 };
 type Pair = {
   kind: 'pair';
@@ -169,31 +171,8 @@ export class DeviceRelay extends DurableObject<Env> {
       }
       if (destination.operation === 'authenticated') {
         const body = record(strictJson(await boundedBody(request)), ['boot_id']);
-        const row = this.ctx.storage.sql
-          .exec<Channel>('SELECT * FROM channels WHERE id=?', destination.channel!)
-          .toArray()[0];
-        if (
-          device !== host.device ||
-          body.boot_id !== host.boot ||
-          !row ||
-          row.boot !== host.boot ||
-          !row.host_used ||
-          !row.client_used ||
-          row.purpose === 'pair' ||
-          !this.current(row)
-        )
-          throw new ProtocolError('NOT_AUTHORIZED', 403);
-        await this.env.ADMISSION.getByName(ADMISSION_OBJECT).authenticated(
-          'channel:' + row.publisher + ':' + row.id,
-          row.reservation,
-        );
-        if (!this.current(row)) throw new ProtocolError('CHANNEL_EXPIRED', 409);
-        this.ctx.storage.sql.exec(
-          'UPDATE channels SET authenticated=1 WHERE id=? AND reservation=?',
-          row.id,
-          row.reservation,
-        );
-        await this.ctx.storage.sync();
+        if (device !== host.device) throw new ProtocolError('NOT_AUTHORIZED', 403);
+        await this.authenticate(host, body.boot_id, destination.channel!);
         return Response.json({ authenticated: true });
       }
       if (destination.operation === 'status') {
@@ -254,6 +233,62 @@ export class DeviceRelay extends DurableObject<Env> {
       this.ctx.waitUntil(this.arm());
     }
   }
+  /** Record that both endpoints completed mutual authentication. */
+  private async authenticate(host: Control, boot: unknown, channel: string): Promise<void> {
+    const row = this.ctx.storage.sql
+      .exec<Channel>('SELECT * FROM channels WHERE id=?', channel)
+      .toArray()[0];
+    if (
+      boot !== host.boot ||
+      !row ||
+      row.boot !== host.boot ||
+      !row.host_used ||
+      !row.client_used ||
+      row.purpose === 'pair' ||
+      !this.current(row)
+    )
+      throw new ProtocolError('NOT_AUTHORIZED', 403);
+    await this.env.ADMISSION.getByName(ADMISSION_OBJECT).authenticated(
+      'channel:' + row.publisher + ':' + row.id,
+      row.reservation,
+    );
+    if (!this.current(row)) throw new ProtocolError('CHANNEL_EXPIRED', 409);
+    this.ctx.storage.sql.exec(
+      'UPDATE channels SET authenticated=1 WHERE id=? AND reservation=?',
+      row.id,
+      row.reservation,
+    );
+    await this.ctx.storage.sync();
+  }
+  /** The only message a publisher may send on its already authenticated control socket. */
+  private async controlMessage(ws: WebSocket, host: Control, message: string): Promise<void> {
+    let channel: string;
+    try {
+      const body = record(strictJson(message), ['type', 'channel_id', 'boot_id']);
+      if (
+        body.type !== 'authenticated' ||
+        !isHex(body.channel_id, 32) ||
+        body.boot_id !== host.boot
+      )
+        throw new ProtocolError();
+      channel = body.channel_id;
+    } catch {
+      this.endControl(ws, host.boot);
+      return;
+    }
+    try {
+      await this.authenticate(host, host.boot, channel);
+      ws.send(JSON.stringify({ type: 'authenticated', channel_id: channel }));
+    } catch (error) {
+      ws.send(
+        JSON.stringify({
+          type: 'authentication_failed',
+          channel_id: channel,
+          code: error instanceof ProtocolError ? error.code : 'RELAY_BUSY',
+        }),
+      );
+    }
+  }
   private async publish(request: Request, device: string, publisher: string): Promise<Response> {
     this.upgrade(request);
     const boot = request.headers.get('X-Relay-Boot');
@@ -283,10 +318,18 @@ export class DeviceRelay extends DurableObject<Env> {
       expires: lease.expires!,
       renewAt: lease.expires! - PUBLISHER_LEASE_MS / 2,
       features: [...features(request)],
+      ...(features(request).has(PREPARED_JOIN) &&
+      isHex(request.headers.get('X-Relay-Public-Key'), 64)
+        ? { public_key: request.headers.get('X-Relay-Public-Key')! }
+        : {}),
     } satisfies Control);
     server.send(JSON.stringify({ type: 'online', boot_id: boot }));
     await this.arm();
-    return new Response(null, { status: 101, webSocket: client });
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { 'X-Relay-Features': RELAY_FEATURES },
+    });
   }
   private async openPair(
     request: Request,
@@ -436,6 +479,22 @@ export class DeviceRelay extends DurableObject<Env> {
       this.endChannel(body.channel_id, reservation, 'HOST_OFFLINE');
       throw new ProtocolError('HOST_OFFLINE', 409);
     }
+    // Pre-issue the publisher's join challenge so joining needs no extra round trip.
+    const joinChallenge =
+      host.features?.includes(PREPARED_JOIN) && host.public_key
+        ? await prepareJoin(
+            this.env,
+            host.device,
+            host.public_key,
+            `/v1/devices/${host.device}/channels/${body.channel_id}/publisher`,
+            hostTicket,
+          )
+        : undefined;
+    if (this.control() !== control) {
+      this.endChannel(body.channel_id, reservation, 'HOST_OFFLINE');
+      throw new ProtocolError('HOST_OFFLINE', 409);
+    }
+    const prepared = joinChallenge ? { join_challenge: joinChallenge } : {};
     control.send(
       JSON.stringify(
         access
@@ -449,6 +508,7 @@ export class DeviceRelay extends DurableObject<Env> {
               target_id: target || null,
               grant_version: grantVersion,
               limits: stream,
+              ...prepared,
             }
           : {
               type: 'pair',
@@ -456,6 +516,7 @@ export class DeviceRelay extends DurableObject<Env> {
               connector: device,
               boot_id: host.boot,
               ticket: hostTicket,
+              ...prepared,
             },
       ),
     );
@@ -582,13 +643,15 @@ export class DeviceRelay extends DurableObject<Env> {
     }
     return new Response(null, { status: 101, webSocket: client });
   }
-  webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): void {
+  async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
     const state = ws.deserializeAttachment() as Attachment | null;
     if (!state) {
       this.close(ws, 'PROTOCOL_ERROR');
       return;
     }
     if (state.kind === 'control') {
+      if (typeof message === 'string' && state.features?.includes(CONTROL_AUTHENTICATED))
+        return this.controlMessage(ws, state, message);
       this.endControl(ws, state.boot);
       return;
     }
@@ -1123,6 +1186,32 @@ export class DeviceRelay extends DurableObject<Env> {
 }
 
 export const STREAM_V2 = 'stream-v2';
+export const CONTROL_AUTHENTICATED = 'control-authenticated';
+export const PREPARED_JOIN = 'prepared-join';
+/** Capabilities this relay offers, advertised on the control upgrade. */
+export const RELAY_FEATURES = [STREAM_V2, CONTROL_AUTHENTICATED, PREPARED_JOIN].join(',');
+/** Issue a join challenge in advance; failure only costs the old extra round trip. */
+export async function prepareJoin(
+  env: Env,
+  device: string,
+  publicKey: string,
+  path: string,
+  ticket: string,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    return (await env.AUTH.getByName('device:' + device).issue({
+      version: 1,
+      origin: env.RELAY_ORIGIN,
+      method: 'GET',
+      path,
+      device_id: device,
+      public_key: publicKey,
+      payload_sha256: await digest(ticket),
+    })) as unknown as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
 /** Capabilities an endpoint advertises; unknown names are ignored. */
 export function features(request: Request): Set<string> {
   return new Set(

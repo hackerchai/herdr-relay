@@ -62,3 +62,32 @@ fn modest_clock_skew_does_not_misclassify_a_fresh_challenge_as_an_identity_failu
         "ACCESS_INVALID"
     );
 }
+
+#[test]
+fn a_pre_issued_challenge_is_used_only_for_the_exact_operation_it_names() {
+    use sha2::Digest;
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../protocol/fixtures/access-v1.json")).unwrap();
+    let mut challenge: Challenge = serde_json::from_value(fixture["challenge"].clone()).unwrap();
+    let path = format!(
+        "/v1/devices/{}/channels/{}/connector",
+        "ab".repeat(32),
+        "cd".repeat(16)
+    );
+    challenge.method = "GET".into();
+    challenge.path = path.clone();
+    challenge.payload_sha256 = hex::encode(sha2::Sha256::digest(b"ticket"));
+    let (origin, key) = (challenge.origin.clone(), challenge.public_key.clone());
+    assert!(challenge.issued_for(&origin, "GET", &path, &key, "ticket"));
+    assert!(!challenge.issued_for("https://other.example", "GET", &path, &key, "ticket"));
+    assert!(!challenge.issued_for(&origin, "POST", &path, &key, "ticket"));
+    assert!(!challenge.issued_for(
+        &origin,
+        "GET",
+        &path.replace("connector", "publisher"),
+        &key,
+        "ticket"
+    ));
+    assert!(!challenge.issued_for(&origin, "GET", &path, &"0".repeat(64), "ticket"));
+    assert!(!challenge.issued_for(&origin, "GET", &path, &key, "another ticket"));
+}

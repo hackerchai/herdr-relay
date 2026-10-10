@@ -14,7 +14,7 @@ pub const WINDOW: u64 = 65536;
 pub const MAX_WINDOW: u32 = 1048576;
 pub const MAX_BYTES_PER_SECOND: u32 = 4194304;
 /// Advertised to the relay; it enables stream v2 only when both ends do.
-pub const FEATURES: &str = "stream-v2";
+pub const FEATURES: &str = "stream-v2,prepared-join,control-authenticated";
 
 /// A present `window` means stream v2: that window, a rate above the legacy
 /// 256 KiB/s cap, and a separate credit message budget.
