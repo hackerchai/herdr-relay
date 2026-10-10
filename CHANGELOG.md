@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/hackerchai/herdr-relay/compare/v0.2.2...v0.2.3) (2026-10-10)
+
+
+### Bug Fixes
+
+* **ci:** upload release assets before publication ([e0c5f13](https://github.com/hackerchai/herdr-relay/commit/e0c5f138f11b769c64c2d9c92cbf4bf7126344ec))
+
 ## [0.2.2](https://github.com/hackerchai/herdr-relay/compare/v0.2.1...v0.2.2) (2026-10-10)
 
 
