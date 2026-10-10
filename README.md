@@ -1,5 +1,7 @@
 # Herdr Relay
 
+![Herdr Relay — Your agents. Any machine.](assets/promo/herdr-relay-banner.png)
+
 Access your Herdr sessions from another computer through the native terminal
 interface. Herdr Relay supports macOS and Linux, encrypted pairing, multiple
 shared sessions, and background sharing with automatic reconnect.
@@ -35,6 +37,16 @@ herdr-relay pair
 
 Paste the link and choose a host and session. For later connections, just run
 `herdr-relay`. The default hosted Relay requires no account or Cloudflare setup.
+
+## In action
+
+Choose a shared session by name, then connect to its agent workspace.
+
+![Choose a shared Herdr session](assets/promo/06-select-session.jpg)
+
+![Codex and Claude Code in an Ubuntu workspace connected from macOS](assets/promo/09-connected-workspace.jpg)
+
+*Terminal views rendered from real demo output.*
 
 ## Guides
 
