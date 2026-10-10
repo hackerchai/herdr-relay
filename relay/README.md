@@ -1,8 +1,9 @@
 # Development Relay
 
-This development Relay supports accountless pairing and persistent native
-targets. The final public-service quotas and release operations are still being
-built. DeviceRelay routes encrypted channels; a separate Room DO holds each
+This development configuration supports accountless pairing and persistent native
+targets. The public service runs at `https://herdr-relay.hackerchai.com`; see the
+[self-hosting guide](../docs/self-hosting.md) to deploy your own instance and
+[operations guide](../docs/operations.md) for quotas. DeviceRelay routes encrypted channels; a separate Room DO holds each
 target's exclusive lease.
 
 ```sh
