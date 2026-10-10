@@ -7,6 +7,8 @@ module tests and Worker bundling; and the pinned Herdr queue regression tests.
 No permanent e2e suite is installed. Overall acceptance remains manual.
 
 Conventional commits feed Release Please after a successful main-branch CI run.
+Feature commits increment the patch version while the project is pre-1.0,
+keeping compatible releases in the current 0.2.x series.
 Its PR updates Cargo manifests/lockfile, the Worker package/lockfile, changelog
 and release manifest together. Because GitHub suppresses ordinary events created
 with `GITHUB_TOKEN`, the release workflow explicitly dispatches CI on the bot PR

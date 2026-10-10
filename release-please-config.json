@@ -6,7 +6,7 @@
     ".": {
       "package-name": "herdr-relay",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": false,
+      "bump-patch-for-minor-pre-major": true,
       "extra-files": [
         {
           "type": "json",
