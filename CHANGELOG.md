@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.2](https://github.com/hackerchai/herdr-relay/compare/v0.2.1...v0.2.2) (2026-10-10)
+
+
+### Features
+
+* **server:** add sleep protection and recovery ([2adf038](https://github.com/hackerchai/herdr-relay/commit/2adf03821c07f6789fec9c01a0bbca25e99d88a2))
+
+
+### Miscellaneous Chores
+
+* **release:** keep compatible releases on 0.2.x ([6d7632e](https://github.com/hackerchai/herdr-relay/commit/6d7632e78808ebb51c65cc6ea6d664ed52031c73))
+
 ## [0.2.1](https://github.com/hackerchai/herdr-relay/compare/v0.2.0...v0.2.1) (2026-10-10)
 
 
