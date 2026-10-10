@@ -1,5 +1,7 @@
 # Herdr Relay
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 ![Herdr Relay — Your agents. Any machine.](assets/promo/herdr-relay-banner.png)
 
 Access your Herdr sessions from another computer through the native terminal
