@@ -12,6 +12,14 @@ use std::{path::Path, time::Duration};
 
 pub const DEFAULT_ORIGIN: &str = "https://herdr-relay.hackerchai.com";
 
+/// A host row's status with how the host was reached.
+fn host_status(status: &str, route: Option<crate::direct::Route>) -> String {
+    match route {
+        Some(route) => format!("{status} · {route}"),
+        None => status.to_owned(),
+    }
+}
+
 #[derive(Clone)]
 struct Session {
     name: String,
@@ -364,10 +372,11 @@ pub async fn connect(
                         )
                         .await
                         {
-                            Ok(Ok(_)) => "online",
-                            Ok(Err(e)) if e.code == "NOT_AUTHORIZED" => "access revoked",
-                            _ => "offline / unavailable",
+                            Ok(Ok(_)) => host_status("online", relay.route(&host.identity)),
+                            Ok(Err(e)) if e.code == "NOT_AUTHORIZED" => "access revoked".into(),
+                            _ => "offline / unavailable".into(),
                         };
+                        // A refreshed hostname takes effect on the next menu load.
                         (index, format!("{}   {status}", host.alias))
                     })
                     .buffer_unordered(4);
@@ -440,24 +449,74 @@ pub async fn connect(
                     )
                 })
                 .collect();
-            match screen.choose(&format!("Sessions on {}", host.alias), &rows, if rows.is_empty() { "No sessions are currently shared. Select sessions with herdr-relay serve on this host." } else { "Enter connects. Detach from Herdr with Ctrl-B, release, then Q to return here." }, false).await? {
+            let connection = relay
+                .route(&host.identity)
+                .map_or_else(|| "unknown".into(), |route| route.to_string());
+            let hint = format!(
+                "{}\nConnection: {connection}",
+                if rows.is_empty() {
+                    "No sessions are currently shared. Select sessions with herdr-relay serve on this host."
+                } else {
+                    "Enter connects. Detach from Herdr with Ctrl-B, release, then Q to return here."
+                }
+            );
+            match screen
+                .choose(&format!("Sessions on {}", host.alias), &rows, &hint, false)
+                .await?
+            {
                 Choice::Back => break,
                 Choice::Refresh => continue,
                 Choice::Pick(index) => {
                     let target = &targets[index];
-                    if target.status != "online" { screen.message("Session unavailable", "This session is offline or busy. Refresh after it becomes available.").await?; continue; }
-                    if let Err(e) = screen.wait("Checking Herdr client", crate::client::check_version(herdr)).await { if e.code == "BACK" { continue; }
-                    if e.code == "CANCELLED" { return Err(e); } screen.message("Herdr is required", &e.to_string()).await?; continue; }
+                    if target.status != "online" {
+                        screen.message("Session unavailable", "This session is offline or busy. Refresh after it becomes available.").await?;
+                        continue;
+                    }
+                    if let Err(e) = screen
+                        .wait("Checking Herdr client", crate::client::check_version(herdr))
+                        .await
+                    {
+                        if e.code == "BACK" {
+                            continue;
+                        }
+                        if e.code == "CANCELLED" {
+                            return Err(e);
+                        }
+                        screen.message("Herdr is required", &e.to_string()).await?;
+                        continue;
+                    }
                     // Stop rendering and release all input ownership before native attach.
                     drop(screen);
-                    let result = crate::client::connect_remote(relay.clone(), &host.identity, &target.id, herdr, "herdr-relay").await;
+                    let result = crate::client::connect_remote(
+                        relay.clone(),
+                        &host.identity,
+                        &target.id,
+                        herdr,
+                        "herdr-relay",
+                    )
+                    .await;
                     screen = Screen::new()?;
                     if let Err(e) = result {
-                        if e.code == "CANCELLED" { return Ok(()); }
-                        screen.message("Connection ended", &format!("{} / {}: {}", host.alias, names::display(&target.name), e.message)).await?;
+                        if e.code == "CANCELLED" {
+                            return Ok(());
+                        }
+                        let via = relay
+                            .route(&host.identity)
+                            .map_or_else(String::new, |route| format!(" (via {route})"));
+                        screen
+                            .message(
+                                "Connection ended",
+                                &format!(
+                                    "{} / {}{via}: {}",
+                                    host.alias,
+                                    names::display(&target.name),
+                                    e.message
+                                ),
+                            )
+                            .await?;
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
     }
@@ -466,6 +525,25 @@ pub async fn connect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_rows_say_whether_the_host_is_reached_directly_or_through_the_relay() {
+        use crate::direct::Route;
+        let lan = Route::Direct("192.168.1.20:47120".parse().unwrap());
+        let tailnet = Route::Direct("100.101.1.2:47120".parse().unwrap());
+        assert_eq!(
+            host_status("online", Some(lan)),
+            "online · direct (LAN 192.168.1.20)"
+        );
+        assert_eq!(
+            host_status("online", Some(tailnet)),
+            "online · direct (tailnet 100.101.1.2)"
+        );
+        assert_eq!(host_status("online", Some(Route::Relay)), "online · relay");
+        assert_eq!(
+            host_status("offline / unavailable", None),
+            "offline / unavailable"
+        );
+    }
     #[test]
     fn discovery_keeps_saved_offline_sessions_and_enabled_state() {
         let tmp = tempfile::tempdir().unwrap();

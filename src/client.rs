@@ -158,6 +158,13 @@ pub async fn connect_remote(
         drop(input);
         let began = tokio::time::Instant::now();
         let runtime = prepared.as_ref().ok().map(|p| p.runtime_id().to_owned());
+        // Only relay channels have relay state to release before a retry.
+        if prepared
+            .as_ref()
+            .is_ok_and(|p| p.route() != crate::direct::Route::Relay)
+        {
+            previous = None;
+        }
         let result = match prepared {
             Ok(prepared) => run(binary, reattach, || prepared.start()).await,
             Err(error) => Err(error),

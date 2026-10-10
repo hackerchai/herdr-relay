@@ -39,6 +39,8 @@ pub struct Relay {
     pending: Arc<tokio::sync::Semaphore>,
     /// Present while the current control connection accepts acknowledgements.
     control_acks: Arc<std::sync::Mutex<Option<ControlAcks>>>,
+    /// How the latest channel to each host was established.
+    routes: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::direct::Route>>>,
 }
 
 #[derive(Deserialize)]
@@ -146,6 +148,7 @@ impl Relay {
             state_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending: Arc::new(tokio::sync::Semaphore::new(4)),
             control_acks: Default::default(),
+            routes: Default::default(),
         })
     }
     pub(crate) fn check_identity(&self) -> Result<()> {
@@ -529,13 +532,72 @@ impl Relay {
             Ok(Box::new(pair_stream(socket, channel)?))
         }
     }
+    /// How the latest channel to this host was established, if any.
+    pub fn route(&self, publisher: &str) -> Option<crate::direct::Route> {
+        self.routes
+            .lock()
+            .expect("route state poisoned")
+            .get(publisher)
+            .copied()
+    }
+    pub(crate) fn revocations(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.revocations.subscribe()
+    }
+    pub(crate) fn origin(&self) -> &str {
+        &self.origin
+    }
+    /// Open an authenticated channel, directly on a shared network when the
+    /// host advertised an endpoint, otherwise (or on any failure) via the relay.
     async fn access(
         &self,
         publisher: &str,
         target: Option<&str>,
         channel: &str,
-    ) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
+    ) -> Result<(
+        tokio_rustls::client::TlsStream<ChannelStream>,
+        crate::direct::Route,
+    )> {
         self.check_identity()?;
+        let purpose = if target.is_some() {
+            Purpose::Attach
+        } else {
+            Purpose::Control
+        };
+        let direct =
+            crate::direct::usable(&self.profile, &self.origin, publisher).map(|endpoint| {
+                let purpose = purpose.clone();
+                async move {
+                    let connected = crate::direct::connect(
+                        &endpoint,
+                        &self.profile,
+                        &self.origin,
+                        publisher,
+                        purpose,
+                        target,
+                    )
+                    .await?;
+                    Ok((connected.stream, connected.address))
+                }
+            });
+        let (result, route, failure) =
+            crate::direct::with_fallback(direct, || self.access_relay(publisher, target, channel))
+                .await;
+        if failure.is_some() {
+            crate::direct::back_off(&self.profile, &self.origin, publisher);
+        }
+        let stream = result?;
+        self.routes
+            .lock()
+            .expect("route state poisoned")
+            .insert(publisher.to_owned(), route);
+        Ok((stream, route))
+    }
+    async fn access_relay(
+        &self,
+        publisher: &str,
+        target: Option<&str>,
+        channel: &str,
+    ) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
         let grant = host::grant(&self.profile, &self.origin, publisher, false)?;
         let purpose = if target.is_some() {
             Purpose::Attach
@@ -654,15 +716,8 @@ impl Relay {
         crate::timing::scope("targets", self.targets_inner(publisher)).await
     }
     async fn targets_inner(&self, publisher: &str) -> Result<Vec<TargetStatus>> {
-        let mut stream = self.access(publisher, None, &random_id()?).await?;
-        let response: host::Response = control::receive(&mut stream).await?;
-        crate::timing::mark("listed");
-        let _ = control::send(&mut stream, &host::Ack {}).await;
-        match response {
-            host::Response::Targets { targets } => Ok(targets),
-            host::Response::Rejected { code } => Err(remote_error(&code)),
-            _ => Err(protocol()),
-        }
+        let (stream, _) = self.access(publisher, None, &random_id()?).await?;
+        host::list_targets(stream, &self.profile, &self.origin, publisher).await
     }
     pub async fn release_channel(&self, publisher: &str, channel: &str) -> Result<()> {
         let response: serde_json::Value = self
@@ -683,10 +738,14 @@ impl Relay {
         channel: &str,
     ) -> Result<PreparedAttach> {
         crate::timing::scope("prepare_attach", async {
-            let mut stream = self.access(publisher, Some(target), channel).await?;
+            let (mut stream, route) = self.access(publisher, Some(target), channel).await?;
             self.ready(&mut stream)
                 .await
-                .map(|runtime_id| PreparedAttach { stream, runtime_id })
+                .map(|runtime_id| PreparedAttach {
+                    stream,
+                    runtime_id,
+                    route,
+                })
         })
         .await
     }
@@ -717,8 +776,12 @@ struct Ticket<'a> {
 pub struct PreparedAttach {
     stream: tokio_rustls::client::TlsStream<ChannelStream>,
     runtime_id: String,
+    route: crate::direct::Route,
 }
 impl PreparedAttach {
+    pub fn route(&self) -> crate::direct::Route {
+        self.route
+    }
     pub fn runtime_id(&self) -> &str {
         &self.runtime_id
     }
@@ -880,7 +943,7 @@ fn network(error: reqwest::Error) -> Error {
 fn local_io(error: std::io::Error) -> Error {
     Error::new("CONNECTION_LOST", error.to_string())
 }
-fn remote_error(code: &str) -> Error {
+pub(crate) fn remote_error(code: &str) -> Error {
     let code = match code {
         "HOST_OFFLINE" => "HOST_OFFLINE",
         "TARGET_BUSY" => "TARGET_BUSY",

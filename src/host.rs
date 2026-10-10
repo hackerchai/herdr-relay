@@ -31,11 +31,29 @@ pub struct TargetStatus {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Response {
-    Targets { targets: Vec<TargetStatus> },
-    Ready { runtime_id: String },
+    Targets {
+        targets: Vec<TargetStatus>,
+    },
+    Ready {
+        runtime_id: String,
+    },
     Started,
-    Rejected { code: String },
+    Rejected {
+        code: String,
+    },
+    /// Sent after Targets; older clients never read it.
+    HostInfo {
+        hostname: String,
+        direct: Option<crate::direct::Endpoint>,
+    },
 }
+/// Sent by a client after its Ack; older hosts have already closed.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ClientInfo {
+    pub hostname: String,
+}
+const INFO_WAIT: Duration = Duration::from_secs(2);
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Start {
@@ -142,6 +160,39 @@ impl Drop for Active<'_> {
     }
 }
 
+/// Client side of a control channel: list targets, exchange hostnames and
+/// learn the host's direct endpoint when it advertises one.
+pub async fn list_targets<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
+    profile: &Path,
+    origin: &str,
+    publisher: &str,
+) -> Result<Vec<TargetStatus>> {
+    let targets = match control::receive(&mut stream).await? {
+        Response::Targets { targets } => targets,
+        Response::Rejected { code } => return Err(crate::relay::remote_error(&code)),
+        _ => return Err(Error::new("PROTOCOL_ERROR", "unexpected control response")),
+    };
+    crate::timing::mark("listed");
+    if control::send(&mut stream, &Ack {}).await.is_err() {
+        return Ok(targets);
+    }
+    let hostname = crate::names::hostname();
+    let _ = control::send(&mut stream, &ClientInfo { hostname }).await;
+    if let Ok(Ok(Response::HostInfo { hostname, direct })) =
+        tokio::time::timeout(INFO_WAIT, control::receive(&mut stream)).await
+    {
+        let _ = crate::names::refresh_host(profile, origin, publisher, &hostname);
+        match direct {
+            Some(endpoint) => {
+                let _ = crate::direct::remember(profile, origin, publisher, &endpoint);
+            }
+            None => crate::direct::forget(profile, origin, publisher),
+        }
+    }
+    Ok(targets)
+}
+
 pub fn grant(profile: &Path, origin: &str, device: &str, incoming: bool) -> Result<Grant> {
     let grants = Store::open(profile, origin)?.grants()?;
     let grants = if incoming {
@@ -182,11 +233,45 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<()>>,
 {
+    guarded(
+        context,
+        targets,
+        serve_inner(stream, profile, context, targets, authenticated),
+    )
+    .await
+}
+
+/// Serve a channel whose mutual TLS and context binding already completed
+/// on the direct LAN path. No relay acknowledgement is involved.
+pub(crate) async fn serve_direct<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: tokio_rustls::server::TlsStream<S>,
+    profile: &Path,
+    context: &Context,
+    targets: &[std::sync::Arc<SharedTarget>],
+    grant_version: u64,
+) -> Result<()> {
+    let operation = operate(
+        stream,
+        profile,
+        context,
+        targets,
+        || async { Ok(()) },
+        grant_version,
+    );
+    guarded(context, targets, operation).await
+}
+
+/// Hold the target's generation for the operation; disabling or replacing
+/// the target ends it.
+async fn guarded(
+    context: &Context,
+    targets: &[std::sync::Arc<SharedTarget>],
+    operation: impl std::future::Future<Output = Result<()>>,
+) -> Result<()> {
     let target = targets
         .iter()
         .find(|t| Some(&t.id) == context.target.as_ref());
     let _active = target.map(|t| t.enter()).transpose()?;
-    let operation = serve_inner(stream, profile, context, targets, authenticated);
     if let Some(target) = target {
         let mut cancelled = target.cancelled.subscribe();
         if *cancelled.borrow() {
@@ -222,13 +307,37 @@ where
     let certificate = hex::decode(&saved.certificate)
         .map_err(|_| Error::new("INVALID_CERTIFICATE", "invalid saved grant certificate"))?
         .into();
-    let mut stream = secure::accept(stream, &identity, &certificate, context).await?;
+    let stream = secure::accept(stream, &identity, &certificate, context).await?;
+    operate(
+        stream,
+        profile,
+        context,
+        targets,
+        authenticated,
+        saved.version,
+    )
+    .await
+}
+
+async fn operate<S, F, Fut>(
+    mut stream: tokio_rustls::server::TlsStream<S>,
+    profile: &Path,
+    context: &Context,
+    targets: &[std::sync::Arc<SharedTarget>],
+    authenticated: F,
+    saved_version: u64,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
     let target = targets
         .iter()
         .find(|t| Some(&t.id) == context.target.as_ref());
     let mut started = false;
     let operation = async {
-        if grant(profile, &context.origin, &context.connector, true)?.version != saved.version {
+        if grant(profile, &context.origin, &context.connector, true)?.version != saved_version {
             return Err(Error::new("NOT_AUTHORIZED", "device grant changed"));
         }
         // The relay acknowledgement takes its own round trips; overlap it with
@@ -244,7 +353,30 @@ where
                         },
                     )
                     .await?;
+                    control::send(
+                        &mut stream,
+                        &Response::HostInfo {
+                            hostname: crate::names::hostname(),
+                            direct: crate::direct::local_endpoint(),
+                        },
+                    )
+                    .await?;
                     let _: Ack = control::receive(&mut stream).await?;
+                    // Optional, from newer clients only; an older one has closed.
+                    if let Ok(Ok(info)) = tokio::time::timeout(
+                        INFO_WAIT,
+                        control::receive::<_, ClientInfo>(&mut stream),
+                    )
+                    .await
+                        && crate::names::valid_name(&info.hostname)
+                    {
+                        let _ = crate::names::remember_peer(
+                            profile,
+                            &context.origin,
+                            &context.connector,
+                            &info.hostname,
+                        );
+                    }
                     Ok(())
                 };
                 tokio::try_join!(exchange, authenticated).map(|_| ())
@@ -275,7 +407,7 @@ where
                 };
                 tokio::try_join!(exchange, authenticated)?;
                 if grant(profile, &context.origin, &context.connector, true)?.version
-                    != saved.version
+                    != saved_version
                 {
                     return Err(Error::new("NOT_AUTHORIZED", "device grant changed"));
                 }

@@ -687,7 +687,10 @@ fn print_peers(profile: &std::path::Path, origin: &str) -> Result<()> {
     let grants = herdr_relay::pairing::Store::open(profile, origin)?.grants()?;
     println!("Allowed to access this device:");
     for grant in grants.allowed_here {
-        println!("  {} (grant {})", grant.device_id, grant.version);
+        let name = herdr_relay::names::peer_name(profile, origin, &grant.device_id)
+            .map(|n| format!("  {}", herdr_relay::names::display(&n)))
+            .unwrap_or_default();
+        println!("  {} (grant {}){name}", grant.device_id, grant.version);
     }
     println!("Hosts this device can access:");
     for grant in grants.accessible_hosts {

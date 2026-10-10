@@ -63,6 +63,32 @@ pub async fn bind<S: AsyncRead + AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// Responder side of `bind` for the direct path, where only the client knows
+/// the channel id: receive its context, check it, then echo it back.
+pub async fn bind_accept<S, F>(stream: &mut S, check: F) -> Result<Context>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnOnce(&Context) -> Result<()>,
+{
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let length = stream.read_u32().await.map_err(io)? as usize;
+        if length == 0 || length > 8192 {
+            return Err(protocol());
+        }
+        let mut encoded = vec![0; length];
+        stream.read_exact(&mut encoded).await.map_err(io)?;
+        let context: Context = serde_json::from_slice(&encoded).map_err(|_| protocol())?;
+        context.validate()?;
+        check(&context)?;
+        stream.write_u32(length as u32).await.map_err(io)?;
+        stream.write_all(&encoded).await.map_err(io)?;
+        stream.flush().await.map_err(io)?;
+        Ok(context)
+    })
+    .await
+    .map_err(|_| Error::new("BIND_TIMEOUT", "peer context exchange exceeded 10 seconds"))?
+}
+
 impl Context {
     pub fn validate(&self) -> Result<()> {
         let origin = url::Url::parse(&self.origin).map_err(|_| protocol())?;

@@ -1,6 +1,7 @@
 pub mod access;
 pub mod client;
 pub mod control;
+pub mod direct;
 pub mod frame;
 pub mod host;
 pub mod identity;
