@@ -35,6 +35,9 @@ case "$mode" in
   prepare) exit 0 ;;
   test) cargo test --locked -p herdr --bin herdr server::client_transport::tests; exit 0 ;;
 esac
+# rustup uses the pinned upstream rust-toolchain.toml in this directory.
+# A target installed for the Relay toolchain does not install it for Herdr.
+rustup target add "$target"
 HERDR_BUILD_CHANNEL=custom HERDR_BUILD_ID=relay-control-bound-1 HERDR_BUILD_COMMIT="$revision" \
   cargo build --release --locked -p herdr --bin herdr --target "$target"
 if [ "$mode" = package ]; then
@@ -46,6 +49,7 @@ if [ "$mode" = package ]; then
   cp "$patch_file" "$output/control-queue.patch"
   cp "$repo_dir/patches/herdr/README.md" "$output/README.md"
   printf 'upstream_revision=%s\npatch_sha256=%s\ntarget=%s\n' "$revision" "$patch_sha" "$target" > "$output/BUILD-INFO.txt"
+  rustc -Vv >> "$output/BUILD-INFO.txt"
   (cd "$output" && shasum -a 256 bin/herdr LICENSE-APACHE control-queue.patch README.md BUILD-INFO.txt > SHA256SUMS)
   (cd "$repo_dir/target/packages" && tar -czf "$name.tar.gz" "$name" && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
 fi

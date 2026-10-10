@@ -19,7 +19,9 @@ Three regression tests cover message overflow/isolation, byte capacity with
 drain/refill, and actual blocked native read/write cancellation. The 32 tests in
 upstream `server::client_transport::tests` pass on the local macOS arm64 build.
 
-Build with Rust 1.99 and Zig 0.16.0:
+Install rustup and Zig 0.16.0. The pinned upstream source selects Rust 1.96.1;
+the script installs the requested target for that toolchain. The separate Relay
+CLI uses Rust 1.99. Build from the repository root:
 
 ```sh
 scripts/build-herdr.sh prepare
