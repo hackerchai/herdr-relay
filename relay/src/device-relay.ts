@@ -11,7 +11,14 @@ import {
   strictJson,
 } from './protocol.ts';
 import { decodeFrame } from './frame.ts';
-import { acceptFrame, initialFlow, quotas, type Flow, type Limits } from './limits.ts';
+import {
+  acceptFrame,
+  channelLimits,
+  initialFlow,
+  quotas,
+  type Flow,
+  type Limits,
+} from './limits.ts';
 import { restoredChannelValid } from './recovery.ts';
 import type { Env } from './index.ts';
 import { ADMISSION_OBJECT, admitted } from './admission.ts';
@@ -24,6 +31,8 @@ type Control = {
   ready: boolean;
   expires: number;
   renewAt?: number;
+  /** Optional capabilities the publisher advertised on its control upgrade. */
+  features?: string[];
 };
 type Pair = {
   kind: 'pair';
@@ -56,6 +65,7 @@ type Channel = {
   grant_version: number;
   authenticated: number;
   rate: number;
+  window: number;
 };
 
 export class DeviceRelay extends DurableObject<Env> {
@@ -87,6 +97,8 @@ export class DeviceRelay extends DurableObject<Env> {
       );
     if (!columns.includes('rate'))
       ctx.storage.sql.exec('ALTER TABLE channels ADD COLUMN rate INTEGER NOT NULL DEFAULT 262144');
+    if (!columns.includes('window'))
+      ctx.storage.sql.exec('ALTER TABLE channels ADD COLUMN window INTEGER NOT NULL DEFAULT 0');
     ctx.storage.sql.exec(
       'CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY,value INTEGER NOT NULL)',
     );
@@ -270,6 +282,7 @@ export class DeviceRelay extends DurableObject<Env> {
       ready: false,
       expires: lease.expires!,
       renewAt: lease.expires! - PUBLISHER_LEASE_MS / 2,
+      features: [...features(request)],
     } satisfies Control);
     server.send(JSON.stringify({ type: 'online', boot_id: boot }));
     await this.arm();
@@ -309,6 +322,10 @@ export class DeviceRelay extends DurableObject<Env> {
       )
         throw new ProtocolError('TARGET_NOT_SHARED', 409);
     } else if (!isHex(body.invitation_id, 32)) throw new ProtocolError();
+    const stream = channelLimits(
+      limits.stream,
+      features(request).has(STREAM_V2) && !!host.features?.includes(STREAM_V2),
+    );
     const hostTicket = randomHex(32),
       clientTicket = randomHex(32);
     const [hostHash, clientHash] = await Promise.all([digest(hostTicket), digest(clientTicket)]);
@@ -388,7 +405,7 @@ export class DeviceRelay extends DurableObject<Env> {
         )
           throw new ProtocolError('QUOTA_EXCEEDED', 429);
         this.ctx.storage.sql.exec(
-          'INSERT INTO channels (id,reservation,publisher,connector,boot,host_ticket,client_ticket,host_used,client_used,expires,purpose,target,grant_version,authenticated,rate) VALUES (?,?,?,?,?,?,?,0,0,?,?,?,?,0,?)',
+          'INSERT INTO channels (id,reservation,publisher,connector,boot,host_ticket,client_ticket,host_used,client_used,expires,purpose,target,grant_version,authenticated,rate,window) VALUES (?,?,?,?,?,?,?,0,0,?,?,?,?,0,?,?)',
           body.channel_id as string,
           reservation,
           host.device,
@@ -400,7 +417,8 @@ export class DeviceRelay extends DurableObject<Env> {
           purpose as string,
           target as string,
           grantVersion,
-          limits.stream.bytes_per_second,
+          stream.bytes_per_second,
+          stream.window ?? 0,
         );
       });
     } catch (error) {
@@ -430,7 +448,7 @@ export class DeviceRelay extends DurableObject<Env> {
               purpose,
               target_id: target || null,
               grant_version: grantVersion,
-              limits: limits.stream,
+              limits: stream,
             }
           : {
               type: 'pair',
@@ -448,7 +466,7 @@ export class DeviceRelay extends DurableObject<Env> {
         boot_id: host.boot,
         ticket: clientTicket,
         grant_version: access ? grantVersion : null,
-        limits: limits.stream,
+        limits: stream,
       },
       { headers: { 'Cache-Control': 'no-store' } },
     );
@@ -510,8 +528,8 @@ export class DeviceRelay extends DurableObject<Env> {
       purpose: row.purpose as Pair['purpose'],
       ready: false,
       expires: row.expires,
-      flow: initialFlow(Date.now(), { bytes_per_second: row.rate }),
-      limits: { bytes_per_second: row.rate },
+      flow: initialFlow(Date.now(), rowLimits(row)),
+      limits: rowLimits(row),
       messages: 0,
     } satisfies Pair);
     const peers = this.channelSockets(channel, row.reservation);
@@ -1102,4 +1120,21 @@ export class DeviceRelay extends DurableObject<Env> {
     await this.ctx.storage.sync();
     return Response.json({ registered: true });
   }
+}
+
+export const STREAM_V2 = 'stream-v2';
+/** Capabilities an endpoint advertises; unknown names are ignored. */
+export function features(request: Request): Set<string> {
+  return new Set(
+    (request.headers.get('X-Relay-Features') ?? '')
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => /^[a-z0-9-]{1,32}$/.test(f))
+      .slice(0, 16),
+  );
+}
+function rowLimits(row: Channel): Limits {
+  return row.window
+    ? { bytes_per_second: row.rate, window: row.window }
+    : { bytes_per_second: row.rate };
 }

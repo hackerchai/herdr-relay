@@ -1,22 +1,38 @@
 import { ProtocolError } from './protocol.ts';
 
+/** Legacy window and rate cap for endpoints that did not negotiate stream v2. */
 export const WINDOW = 65536;
+export const LEGACY_BYTES_PER_SECOND = 262144;
+export const MAX_BYTES_PER_SECOND = 4194304;
+export const MAX_WINDOW = 1048576;
 export const MESSAGE_RATE = 150;
 export const MESSAGE_BURST = 300;
+/** A present `window` means stream v2: that window and a separate credit budget. */
 export interface Limits {
   bytes_per_second: number;
+  window?: number;
+}
+export function windowOf(limits: Limits): number {
+  return limits.window ?? WINDOW;
+}
+/** Both endpoints of a channel must receive the same limits. */
+export function channelLimits(stream: Required<Limits>, v2: boolean): Limits {
+  return v2
+    ? { bytes_per_second: stream.bytes_per_second, window: stream.window }
+    : { bytes_per_second: Math.min(stream.bytes_per_second, LEGACY_BYTES_PER_SECOND) };
 }
 export interface Quotas {
   attach: number;
   short: number;
   pending: number;
-  stream: Limits;
+  stream: Required<Limits>;
 }
 export function quotas(env: {
   MAX_DEVICE_ATTACH?: string;
   MAX_DEVICE_SHORT?: string;
   MAX_PENDING_CHANNELS?: string;
   CHANNEL_BYTES_PER_SECOND?: string;
+  CHANNEL_WINDOW_BYTES?: string;
 }): Quotas {
   const integer = (
     value: string | undefined,
@@ -32,10 +48,13 @@ export function quotas(env: {
     return n;
   };
   return {
-    attach: integer(env.MAX_DEVICE_ATTACH, 8, 1, 8),
-    short: integer(env.MAX_DEVICE_SHORT, 4, 1, 4),
-    pending: integer(env.MAX_PENDING_CHANNELS, 4, 1, 4),
-    stream: { bytes_per_second: integer(env.CHANNEL_BYTES_PER_SECOND, 262144, 16384, 262144) },
+    attach: integer(env.MAX_DEVICE_ATTACH, 8, 1, 64),
+    short: integer(env.MAX_DEVICE_SHORT, 4, 1, 32),
+    pending: integer(env.MAX_PENDING_CHANNELS, 4, 1, 32),
+    stream: {
+      bytes_per_second: integer(env.CHANNEL_BYTES_PER_SECOND, 1048576, 16384, MAX_BYTES_PER_SECOND),
+      window: integer(env.CHANNEL_WINDOW_BYTES, 262144, WINDOW, MAX_WINDOW),
+    },
   };
 }
 
@@ -44,7 +63,11 @@ export interface Flow {
   ack: string;
   progress: number;
   peak: number;
-  budget: { at: number; bytes: number; messages: number };
+  /** `credits` exists only for stream v2 flows. */
+  budget: { at: number; bytes: number; messages: number; credits?: number };
+}
+export function burstOf(limits: Limits): number {
+  return Math.max(windowOf(limits), limits.bytes_per_second * 2);
 }
 export function initialFlow(now: number, limits: Limits): Flow {
   return {
@@ -54,8 +77,9 @@ export function initialFlow(now: number, limits: Limits): Flow {
     peak: 0,
     budget: {
       at: now,
-      bytes: Math.max(WINDOW, limits.bytes_per_second * 2),
+      bytes: burstOf(limits),
       messages: MESSAGE_BURST,
+      ...(limits.window === undefined ? {} : { credits: MESSAGE_BURST }),
     },
   };
 }
@@ -67,17 +91,20 @@ export function acceptFrame(
   limits: Limits,
 ): { state: Flow; peer: Flow; forward: boolean } {
   const elapsed = Math.max(0, now - state.budget.at) / 1000;
-  const budget = {
+  const refill = (n: number) => Math.min(MESSAGE_BURST, n + elapsed * MESSAGE_RATE);
+  const budget: Flow['budget'] = {
     at: Math.max(now, state.budget.at),
-    bytes: Math.min(
-      Math.max(WINDOW, limits.bytes_per_second * 2),
-      state.budget.bytes + elapsed * limits.bytes_per_second,
-    ),
-    messages: Math.min(MESSAGE_BURST, state.budget.messages + elapsed * MESSAGE_RATE),
+    bytes: Math.min(burstOf(limits), state.budget.bytes + elapsed * limits.bytes_per_second),
+    messages: refill(state.budget.messages),
   };
-  if (budget.messages < 1 || budget.bytes < frame.payload.length)
+  // Stream v2 charges credits to their own bucket, so heavy traffic in one
+  // direction cannot starve the acknowledgements the other direction needs.
+  const separate = limits.window !== undefined;
+  if (separate) budget.credits = refill(state.budget.credits ?? MESSAGE_BURST);
+  const bucket = separate && frame.kind === 2 ? 'credits' : 'messages';
+  if (budget[bucket]! < 1 || budget.bytes < frame.payload.length)
     throw new ProtocolError('RATE_LIMITED', 429);
-  budget.messages -= 1;
+  budget[bucket]! -= 1;
   budget.bytes -= frame.payload.length;
   let next = { ...state, budget },
     other = peer,
@@ -90,7 +117,7 @@ export function acceptFrame(
       frame.payload.length > 16384 ||
       frame.offset !== BigInt(state.sent) ||
       end > 0xffffffffffffffffn ||
-      inflight > BigInt(WINDOW) ||
+      inflight > BigInt(windowOf(limits)) ||
       inflight < 0n
     )
       throw new ProtocolError();

@@ -107,7 +107,13 @@ impl Relay {
             origin.to_owned()
         };
         let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut features = reqwest::header::HeaderMap::new();
+        features.insert(
+            "X-Relay-Features",
+            reqwest::header::HeaderValue::from_static(crate::stream::FEATURES),
+        );
         let http = reqwest::Client::builder()
+            .default_headers(features)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(10))
@@ -231,6 +237,10 @@ impl Relay {
         request
             .headers_mut()
             .insert("X-Relay-Proof", proof.parse().map_err(|_| protocol())?);
+        request.headers_mut().insert(
+            "X-Relay-Features",
+            crate::stream::FEATURES.parse().map_err(|_| protocol())?,
+        );
         request.headers_mut().insert(
             tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(header.as_bytes())
                 .map_err(|_| protocol())?,
