@@ -133,15 +133,18 @@ where
             let mut last_seen = tokio::time::Instant::now();
             let mut send_progress = last_seen;
             let mut receive_progress = last_seen;
+            // Bytes already read from the endpoint, sent once the budget covers
+            // their actual size: a keystroke never waits for a full chunk.
+            let mut pending = 0usize;
             loop {
                 outgoing.refill();
                 let allowance = (WINDOW - (sent - ack)).min(16384) as usize;
-                let can_data = outgoing.ready(16384);
+                let can_data = pending > 0 && outgoing.ready(pending);
                 let can_credit = outgoing.ready(0);
                 let budget_deadline = outgoing.deadline(if consumed > credited && !can_credit {
                     0
                 } else {
-                    16384
+                    pending
                 });
                 tokio::select! {
                     biased;
@@ -149,21 +152,25 @@ where
                     _ = tokio::time::sleep_until(last_seen + Duration::from_secs(75)) => return Err(protocol()),
                     _ = tokio::time::sleep_until(send_progress + Duration::from_secs(30)), if sent > ack => return Err(protocol()),
                     _ = tokio::time::sleep_until(receive_progress + Duration::from_secs(30)), if received > consumed => return Err(protocol()),
-                    _ = tokio::time::sleep_until(budget_deadline), if !can_data || (consumed>credited && !can_credit) => {},
+                    _ = tokio::time::sleep_until(budget_deadline), if (pending > 0 && !can_data) || (consumed>credited && !can_credit) => {},
                     _ = async {}, if consumed>credited && can_credit => {
                         outgoing.take(0)?;
                         let frame = Frame {kind:Kind::Credit,channel,offset:consumed,payload:&[]}.encode()?;
                         send(&mut socket,Message::Binary(frame.into())).await?;
                         credited=consumed;
                     },
-                    result = reader.read(&mut bytes[..allowance]), if allowance > 0 && can_data => {
+                    _ = async {}, if can_data => {
+                        if sent == ack { send_progress = tokio::time::Instant::now(); }
+                        outgoing.take(pending)?;
+                        let frame = Frame {kind:Kind::Data,channel,offset:sent,payload:&bytes[..pending]}.encode()?;
+                        send(&mut socket,Message::Binary(frame.into())).await?;
+                        sent = sent.checked_add(pending as u64).ok_or_else(protocol)?;
+                        pending = 0;
+                    },
+                    result = reader.read(&mut bytes[..allowance]), if allowance > 0 && pending == 0 => {
                         let n = result.map_err(io)?;
                         if n == 0 { return Ok(()); }
-                        if sent == ack { send_progress = tokio::time::Instant::now(); }
-                        outgoing.take(n)?;
-                        let frame = Frame {kind:Kind::Data,channel,offset:sent,payload:&bytes[..n]}.encode()?;
-                        send(&mut socket,Message::Binary(frame.into())).await?;
-                        sent = sent.checked_add(n as u64).ok_or_else(protocol)?;
+                        pending = n;
                     },
                     result = consumed_rx.changed() => {
                         result.map_err(|_| protocol())?;

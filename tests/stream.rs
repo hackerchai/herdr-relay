@@ -104,3 +104,34 @@ async fn a_peer_that_answers_pings_but_never_consumes_data_cannot_hold_a_channel
     .await
     .expect("a stalled credit window survived its 30-second progress deadline");
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_keystroke_after_a_burst_does_not_wait_for_a_full_chunk_of_budget() {
+    let (a, b) = tokio::io::duplex(1024 * 1024);
+    let (a, b) = tokio::join!(
+        WebSocketStream::from_raw_socket(a, Role::Client, None),
+        WebSocketStream::from_raw_socket(b, Role::Server, None)
+    );
+    let (mut ar, mut aw) = tokio::io::split(websocket_stream(a, &[4; 16]));
+    let (mut br, mut bw) = tokio::io::split(websocket_stream(b, &[4; 16]));
+    // The default 256 KiB/s limit allows a 512 KiB burst; spend all of it.
+    let burst = 512 * 1024;
+    let send = async { aw.write_all(&vec![1; burst]).await.unwrap() };
+    let receive = async {
+        let mut data = vec![0; burst];
+        br.read_exact(&mut data).await.unwrap();
+    };
+    tokio::join!(send, receive);
+    let began = tokio::time::Instant::now();
+    aw.write_all(b"k").await.unwrap();
+    let mut key = [0; 1];
+    br.read_exact(&mut key).await.unwrap();
+    assert_eq!(&key, b"k");
+    let waited = began.elapsed();
+    // Refilling one byte takes microseconds; a full 16 KiB chunk takes ~66 ms.
+    assert!(
+        waited < std::time::Duration::from_millis(5),
+        "a one-byte message waited {waited:?} for unrelated budget"
+    );
+    drop((&mut ar, &mut bw));
+}
