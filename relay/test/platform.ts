@@ -77,6 +77,7 @@ export function platform(sockets: TestSocket[] = []) {
 export class TestSocket {
   readyState = WebSocket.OPEN;
   attachment: Record<string, unknown>;
+  sent: string[] = [];
   constructor(attachment: Record<string, unknown>) {
     this.attachment = structuredClone(attachment);
   }
@@ -85,6 +86,9 @@ export class TestSocket {
   }
   serializeAttachment(value: Record<string, unknown>) {
     this.attachment = structuredClone(value);
+  }
+  send(message: string) {
+    this.sent.push(message);
   }
   close() {
     this.readyState = WebSocket.CLOSED;

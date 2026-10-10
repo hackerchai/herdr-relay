@@ -1,6 +1,6 @@
 import { Room } from './room.ts';
 import { AccessGate } from './access-gate.ts';
-import { DeviceRelay } from './device-relay.ts';
+import { DeviceRelay, PREPARED_JOIN, features, prepareJoin } from './device-relay.ts';
 import { quotas } from './limits.ts';
 import { Admission, ADMISSION_OBJECT, admitted } from './admission.ts';
 import { globalQuotas, type AdmissionEnv } from './admission-ledger.ts';
@@ -171,6 +171,7 @@ export default {
       }
       const headers = new Headers(request.headers);
       headers.set('X-Relay-Device', device);
+      headers.set('X-Relay-Public-Key', proof.challenge.public_key);
       headers.delete('X-Relay-Proof');
       const forwarded = new Request(request.url, {
         method: request.method,
@@ -179,6 +180,12 @@ export default {
       });
       const response = await env.DEVICES.getByName(destination.publisher).fetch(forwarded);
       status = response.status;
+      if (
+        response.status === 200 &&
+        ['access', 'pair'].includes(destination.operation) &&
+        features(request).has(PREPARED_JOIN)
+      )
+        return await withJoinChallenge(env, response, destination.publisher, proof.challenge);
       return response;
     } catch (error) {
       const response = failure(error);
@@ -194,3 +201,25 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env>;
+
+/** Issue the connector's join challenge here, near the connector. */
+async function withJoinChallenge(
+  env: Env,
+  response: Response,
+  publisher: string,
+  proof: Proof['challenge'],
+): Promise<Response> {
+  const opened = (await response.json()) as Record<string, unknown>;
+  if (!isHex(opened.channel_id, 32) || !isHex(opened.ticket, 64))
+    return Response.json(opened, { headers: { 'Cache-Control': 'no-store' } });
+  const challenge = await prepareJoin(
+    env,
+    proof.device_id,
+    proof.public_key,
+    `/v1/devices/${publisher}/channels/${opened.channel_id}/connector`,
+    opened.ticket,
+  );
+  return Response.json(challenge ? { ...opened, join_challenge: challenge } : opened, {
+    headers: { 'Cache-Control': 'no-store' },
+  });
+}

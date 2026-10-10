@@ -123,6 +123,28 @@ pub async fn run(profile: &Path, origin: &str, remote: Option<crate::relay::Rela
         let registry = registry.clone();
         publisher.spawn(async move { relay.publish_forever(registry).await });
     }
+    // Direct LAN/tailnet path beside the relay; the relay remains the fallback.
+    let mut direct = tokio::task::JoinSet::new();
+    if let (Some(relay), Some(port)) = (remote.as_ref(), crate::direct::configured_port()) {
+        match crate::direct::Listener::bind_port(port).await {
+            Ok(listener) => {
+                let endpoint = listener.endpoint();
+                crate::direct::advertise(Some((endpoint.listener_id, endpoint.port)));
+                eprintln!("Direct connections: TCP port {}", endpoint.port);
+                let (profile, origin) = (profile.to_owned(), relay.origin().to_owned());
+                let (registry, revocations) = (registry.clone(), relay.revocations());
+                direct.spawn(async move {
+                    let _ = listener
+                        .serve(&profile, &origin, registry, revocations)
+                        .await;
+                });
+            }
+            Err(error) => eprintln!(
+                "Direct connections unavailable ({}); using the relay only",
+                error.code
+            ),
+        }
+    }
     let mut monitor = tokio::time::interval(std::time::Duration::from_millis(500));
     monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut outcome = Ok(());
@@ -170,6 +192,8 @@ pub async fn run(profile: &Path, origin: &str, remote: Option<crate::relay::Rela
             }
         }
     }
+    crate::direct::advertise(None);
+    direct.shutdown().await;
     tasks.shutdown().await;
     synchronization.shutdown().await;
     publisher.shutdown().await;

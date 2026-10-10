@@ -58,8 +58,12 @@ mod cli_tests {
 
     use super::*;
 
+    /// Serializes tests that read or change process environment variables.
+    pub(super) static ENVIRONMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn hosted_origin_is_the_default_and_self_hosting_stays_explicit() {
+        let _environment = ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
         let cli = Cli::try_parse_from(["herdr-relay", "serve", "--relay"]).unwrap();
         let Some(Action::Serve { origin, .. }) = cli.command else {
             panic!("serve command")
@@ -91,7 +95,7 @@ mod cli_tests {
 )]
 struct Cli {
     /// Private Relay state directory (separate from Herdr configuration).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "HERDR_RELAY_PROFILE")]
     profile: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Action>,
@@ -109,13 +113,13 @@ enum Action {
         #[arg(long)]
         restart_service: bool,
         /// GitHub owner/repository hosting release assets.
-        #[arg(long)]
+        #[arg(long, env = "HERDR_RELAY_UPDATE_REPOSITORY")]
         repository: Option<String>,
     },
     /// Run the Relay service without a terminal (used by service managers).
     #[command(hide = true)]
     Daemon {
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
         #[arg(long, hide = true)]
         relay_local_url: Option<String>,
@@ -135,7 +139,7 @@ enum Action {
     /// Select Herdr sessions to share and start the background service with sleep protection.
     #[command(display_order = 10, after_help = herdr_relay::power::HELP)]
     Serve {
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
         /// Run without menus in the foreground (local diagnostics).
         #[arg(long)]
@@ -160,7 +164,7 @@ enum Action {
     #[command(alias = "status")]
     #[command(hide = true)]
     Targets {
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
         #[arg(long)]
         host: String,
@@ -170,13 +174,13 @@ enum Action {
     /// Choose a host and Herdr session in the terminal menu.
     #[command(display_order = 30)]
     Connect {
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
         #[arg(long)]
         host: Option<String>,
         #[arg(long)]
         target: Option<String>,
-        #[arg(long, default_value = "herdr")]
+        #[arg(long, env = "HERDR_RELAY_HERDR", default_value = "herdr")]
         herdr: PathBuf,
         #[arg(long)]
         relay_local_url: Option<String>,
@@ -196,7 +200,7 @@ enum Action {
     /// Show independent incoming and outgoing device grants.
     #[command(hide = true)]
     Devices {
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
     },
     /// Manage incoming device authorization; reverse grants remain independent.
@@ -222,7 +226,7 @@ enum Action {
         /// Herdr's configuration directory, normally $XDG_CONFIG_HOME/herdr.
         #[arg(long, requires = "session")]
         herdr_config_dir: Option<PathBuf>,
-        #[arg(long, default_value = "herdr")]
+        #[arg(long, env = "HERDR_RELAY_HERDR", default_value = "herdr")]
         herdr: PathBuf,
     },
 }
@@ -231,7 +235,7 @@ enum Action {
 enum RelayAction {
     /// Read aggregate capacity counters using an operator-authorized device identity.
     Status {
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
         #[arg(long, hide = true)]
         dev_relay_url: Option<String>,
@@ -249,7 +253,7 @@ enum RelayAction {
 enum ServiceAction {
     /// Copy this CLI to persistent private storage and install its service definition.
     Install {
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
         /// Opt in to automatic start in your login session.
         #[arg(long)]
@@ -277,12 +281,12 @@ enum AutostartMode {
 #[derive(Subcommand)]
 enum PeerAction {
     List {
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
     },
     Revoke {
         device: String,
-        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
     },
 }
@@ -351,14 +355,22 @@ async fn main() {
     }
 }
 
-async fn run(cli: Cli) -> Result<()> {
-    match cli.command.unwrap_or(Action::Connect {
-        origin: DEFAULT_RELAY_ORIGIN.into(),
+/// Plain `herdr-relay` opens the host menu, honoring the same environment.
+fn default_action() -> Action {
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    Action::Connect {
+        origin: var("HERDR_RELAY_ORIGIN").unwrap_or_else(|| DEFAULT_RELAY_ORIGIN.into()),
         host: None,
         target: None,
-        herdr: "herdr".into(),
+        herdr: var("HERDR_RELAY_HERDR")
+            .unwrap_or_else(|| "herdr".into())
+            .into(),
         relay_local_url: None,
-    }) {
+    }
+}
+
+async fn run(cli: Cli) -> Result<()> {
+    match cli.command.unwrap_or_else(default_action) {
         Action::Update {
             check,
             restart_service,
@@ -687,7 +699,10 @@ fn print_peers(profile: &std::path::Path, origin: &str) -> Result<()> {
     let grants = herdr_relay::pairing::Store::open(profile, origin)?.grants()?;
     println!("Allowed to access this device:");
     for grant in grants.allowed_here {
-        println!("  {} (grant {})", grant.device_id, grant.version);
+        let name = herdr_relay::names::peer_name(profile, origin, &grant.device_id)
+            .map(|n| format!("  {}", herdr_relay::names::display(&n)))
+            .unwrap_or_default();
+        println!("  {} (grant {}){name}", grant.device_id, grant.version);
     }
     println!("Hosts this device can access:");
     for grant in grants.accessible_hosts {
@@ -892,4 +907,54 @@ async fn read_invitation() -> Result<String> {
 }
 fn input_io(error: std::io::Error) -> Error {
     Error::new("PAIR_INPUT", error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn self_hosted_settings_can_come_from_the_environment() {
+        let _environment = super::cli_tests::ENVIRONMENT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("HERDR_RELAY_ORIGIN", "https://relay.example.org");
+            std::env::set_var("HERDR_RELAY_PROFILE", "/tmp/relay-profile");
+            std::env::set_var("HERDR_RELAY_HERDR", "/opt/herdr/bin/herdr");
+        }
+        let cli = Cli::try_parse_from(["herdr-relay", "targets", "--host", "x"]).unwrap();
+        assert_eq!(
+            cli.profile.as_deref(),
+            Some(std::path::Path::new("/tmp/relay-profile"))
+        );
+        assert!(
+            matches!(cli.command, Some(Action::Targets { ref origin, .. }) if origin == "https://relay.example.org")
+        );
+        let cli = Cli::try_parse_from(["herdr-relay", "connect"]).unwrap();
+        assert!(
+            matches!(cli.command, Some(Action::Connect { ref origin, ref herdr, .. })
+            if origin == "https://relay.example.org" && herdr == std::path::Path::new("/opt/herdr/bin/herdr"))
+        );
+        assert!(
+            matches!(default_action(), Action::Connect { ref origin, ref herdr, .. }
+            if origin == "https://relay.example.org" && herdr == std::path::Path::new("/opt/herdr/bin/herdr"))
+        );
+        // An explicit flag still wins over the environment.
+        let cli =
+            Cli::try_parse_from(["herdr-relay", "serve", "--origin", "https://other.example"])
+                .unwrap();
+        assert!(
+            matches!(cli.command, Some(Action::Serve { ref origin, .. }) if origin == "https://other.example")
+        );
+        unsafe {
+            std::env::remove_var("HERDR_RELAY_ORIGIN");
+            std::env::remove_var("HERDR_RELAY_PROFILE");
+            std::env::remove_var("HERDR_RELAY_HERDR");
+        }
+        let cli = Cli::try_parse_from(["herdr-relay", "serve"]).unwrap();
+        assert!(
+            matches!(cli.command, Some(Action::Serve { ref origin, .. }) if origin == DEFAULT_RELAY_ORIGIN)
+        );
+    }
 }

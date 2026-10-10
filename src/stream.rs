@@ -9,23 +9,40 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
+/// Legacy window, used unless the relay negotiated stream v2 for both ends.
 pub const WINDOW: u64 = 65536;
+pub const MAX_WINDOW: u32 = 1048576;
+pub const MAX_BYTES_PER_SECOND: u32 = 4194304;
+/// Advertised to the relay; it enables stream v2 only when both ends do.
+pub const FEATURES: &str = "stream-v2,prepared-join,control-authenticated";
 
+/// A present `window` means stream v2: that window, a rate above the legacy
+/// 256 KiB/s cap, and a separate credit message budget.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
     pub bytes_per_second: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<u32>,
 }
 impl Default for Limits {
     fn default() -> Self {
         Self {
             bytes_per_second: 262144,
+            window: None,
         }
     }
 }
 impl Limits {
     pub fn validate(&self) -> Result<()> {
-        if !(16384..=262144).contains(&self.bytes_per_second) {
+        let rate = match self.window {
+            None => 16384..=262144,
+            Some(window) if (WINDOW as u32..=MAX_WINDOW).contains(&window) => {
+                16384..=MAX_BYTES_PER_SECOND
+            }
+            Some(_) => return Err(Error::new("PROTOCOL_ERROR", "unsupported stream window")),
+        };
+        if !rate.contains(&self.bytes_per_second) {
             return Err(Error::new(
                 "PROTOCOL_ERROR",
                 "unsupported stream rate limit",
@@ -33,11 +50,16 @@ impl Limits {
         }
         Ok(())
     }
+    fn window(&self) -> u64 {
+        self.window.map_or(WINDOW, u64::from)
+    }
 }
 
 struct Budget {
     bytes: f64,
     messages: f64,
+    /// Separate credit messages for stream v2; `None` shares `messages`.
+    credits: Option<f64>,
     byte_rate: f64,
     message_rate: f64,
     burst: f64,
@@ -45,10 +67,11 @@ struct Budget {
 }
 impl Budget {
     fn new(limits: Limits, pace: f64) -> Self {
-        let burst = (limits.bytes_per_second as f64 * 2.0).max(WINDOW as f64);
+        let burst = (limits.bytes_per_second as f64 * 2.0).max(limits.window() as f64);
         Self {
             bytes: burst,
             messages: 300.0,
+            credits: limits.window.map(|_| 300.0),
             byte_rate: limits.bytes_per_second as f64 * pace,
             message_rate: 150.0 * pace,
             burst,
@@ -61,6 +84,38 @@ impl Budget {
         self.updated = now;
         self.bytes = (self.bytes + elapsed * self.byte_rate).min(self.burst);
         self.messages = (self.messages + elapsed * self.message_rate).min(300.0);
+        if let Some(credits) = &mut self.credits {
+            *credits = (*credits + elapsed * self.message_rate).min(300.0);
+        }
+    }
+    fn credit_messages(&self) -> f64 {
+        self.credits.unwrap_or(self.messages)
+    }
+    fn credit_ready(&self) -> bool {
+        self.credit_messages() >= 1.0
+    }
+    fn take_credit(&mut self) -> Result<()> {
+        self.refill();
+        if !self.credit_ready() {
+            return Err(protocol());
+        }
+        match &mut self.credits {
+            Some(credits) => *credits -= 1.0,
+            None => self.messages -= 1.0,
+        }
+        Ok(())
+    }
+    fn credit_deadline(&self) -> tokio::time::Instant {
+        self.updated
+            + Duration::from_secs_f64(((1.0 - self.credit_messages()) / self.message_rate).max(0.0))
+                .max(Duration::from_micros(1))
+    }
+    /// Validate a received frame against the peer's pace.
+    fn take_frame(&mut self, kind: Kind, bytes: usize) -> Result<()> {
+        if kind == Kind::Credit && self.credits.is_some() {
+            return self.take_credit();
+        }
+        self.take(bytes)
     }
     fn ready(&self, bytes: usize) -> bool {
         self.messages >= 1.0 && self.bytes >= bytes as f64
@@ -126,6 +181,7 @@ where
                 (0u64, 0u64, 0u64, 0u64, 0u64);
             // A small pacing margin tolerates network batching and clock
             // differences while the cloud still enforces the advertised cap.
+            let window = limits.window();
             let mut outgoing = Budget::new(limits, 0.95);
             let mut incoming_budget = Budget::new(limits, 1.0);
             let mut bytes = [0; 16384];
@@ -133,37 +189,44 @@ where
             let mut last_seen = tokio::time::Instant::now();
             let mut send_progress = last_seen;
             let mut receive_progress = last_seen;
+            // Bytes already read from the endpoint, sent once the budget covers
+            // their actual size: a keystroke never waits for a full chunk.
+            let mut pending = 0usize;
             loop {
                 outgoing.refill();
-                let allowance = (WINDOW - (sent - ack)).min(16384) as usize;
-                let can_data = outgoing.ready(16384);
-                let can_credit = outgoing.ready(0);
-                let budget_deadline = outgoing.deadline(if consumed > credited && !can_credit {
-                    0
+                let allowance = (window - (sent - ack)).min(16384) as usize;
+                let can_data = pending > 0 && outgoing.ready(pending);
+                let can_credit = outgoing.credit_ready();
+                let budget_deadline = if consumed > credited && !can_credit {
+                    outgoing.credit_deadline()
                 } else {
-                    16384
-                });
+                    outgoing.deadline(pending)
+                };
                 tokio::select! {
                     biased;
                     _ = &mut cancelled => return Ok(()),
                     _ = tokio::time::sleep_until(last_seen + Duration::from_secs(75)) => return Err(protocol()),
                     _ = tokio::time::sleep_until(send_progress + Duration::from_secs(30)), if sent > ack => return Err(protocol()),
                     _ = tokio::time::sleep_until(receive_progress + Duration::from_secs(30)), if received > consumed => return Err(protocol()),
-                    _ = tokio::time::sleep_until(budget_deadline), if !can_data || (consumed>credited && !can_credit) => {},
+                    _ = tokio::time::sleep_until(budget_deadline), if (pending > 0 && !can_data) || (consumed>credited && !can_credit) => {},
                     _ = async {}, if consumed>credited && can_credit => {
-                        outgoing.take(0)?;
+                        outgoing.take_credit()?;
                         let frame = Frame {kind:Kind::Credit,channel,offset:consumed,payload:&[]}.encode()?;
                         send(&mut socket,Message::Binary(frame.into())).await?;
                         credited=consumed;
                     },
-                    result = reader.read(&mut bytes[..allowance]), if allowance > 0 && can_data => {
+                    _ = async {}, if can_data => {
+                        if sent == ack { send_progress = tokio::time::Instant::now(); }
+                        outgoing.take(pending)?;
+                        let frame = Frame {kind:Kind::Data,channel,offset:sent,payload:&bytes[..pending]}.encode()?;
+                        send(&mut socket,Message::Binary(frame.into())).await?;
+                        sent = sent.checked_add(pending as u64).ok_or_else(protocol)?;
+                        pending = 0;
+                    },
+                    result = reader.read(&mut bytes[..allowance]), if allowance > 0 && pending == 0 => {
                         let n = result.map_err(io)?;
                         if n == 0 { return Ok(()); }
-                        if sent == ack { send_progress = tokio::time::Instant::now(); }
-                        outgoing.take(n)?;
-                        let frame = Frame {kind:Kind::Data,channel,offset:sent,payload:&bytes[..n]}.encode()?;
-                        send(&mut socket,Message::Binary(frame.into())).await?;
-                        sent = sent.checked_add(n as u64).ok_or_else(protocol)?;
+                        pending = n;
                     },
                     result = consumed_rx.changed() => {
                         result.map_err(|_| protocol())?;
@@ -175,12 +238,12 @@ where
                         match message.ok_or_else(protocol)?.map_err(|_| protocol())? {
                             Message::Binary(bytes) => {
                                 let frame = Frame::decode(&bytes)?;
-                                incoming_budget.take(frame.payload.len())?;
+                                incoming_budget.take_frame(frame.kind, frame.payload.len())?;
                                 if frame.channel != channel { return Err(protocol()); }
                                 match frame.kind {
                                     Kind::Data => {
                                         let end = received.checked_add(frame.payload.len() as u64).ok_or_else(protocol)?;
-                                        if frame.payload.is_empty() || frame.offset != received || end-credited > WINDOW { return Err(protocol()); }
+                                        if frame.payload.is_empty() || frame.offset != received || end-credited > window { return Err(protocol()); }
                                         if received == consumed { receive_progress = tokio::time::Instant::now(); }
                                         incoming.try_send(frame.payload.to_vec()).map_err(|_| protocol())?;
                                         received = end;

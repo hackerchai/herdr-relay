@@ -1,3 +1,4 @@
+mod common;
 use herdr_relay::{identity::Identity, relay::Relay, retry::Backoff, service};
 use std::{os::unix::fs::PermissionsExt, time::Duration};
 use tokio::{
@@ -92,4 +93,53 @@ async fn quota_cooldown_keeps_the_local_daemon_responsive_and_cancellable() {
     assert!(!online);
     daemon.abort();
     assert!(daemon.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn endpoints_advertise_their_stream_capabilities_to_the_relay() {
+    let root = profile();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let gateway = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.windows(4).any(|v| v == b"\r\n\r\n") {
+            let mut bytes = [0u8; 2048];
+            let n = socket.read(&mut bytes).await.unwrap();
+            assert!(n > 0);
+            request.extend_from_slice(&bytes[..n]);
+        }
+        let body = r#"{"code":"RELAY_BUSY"}"#;
+        let response = format!(
+            "HTTP/1.1 503 Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+        String::from_utf8_lossy(&request).to_ascii_lowercase()
+    });
+    let relay = Relay::new(root.path(), "https://relay.example", Some(&address)).unwrap();
+    let _ = relay.operator_status().await;
+    let request = gateway.await.unwrap();
+    assert!(
+        request.contains("\r\nx-relay-features: stream-v2"),
+        "{request}"
+    );
+}
+
+#[tokio::test]
+async fn only_channels_offered_to_the_relay_need_relay_cleanup() {
+    let fixture = common::Fixture::new();
+    let (address, gateway) = failed_gateway(503, r#"{"code":"RELAY_BUSY"}"#.into(), 1).await;
+    let relay = Relay::new(&fixture.client(), common::ORIGIN, Some(&address)).unwrap();
+    let offered = "ab".repeat(16);
+    assert!(
+        relay
+            .prepare_attach(&fixture.a.id, &fixture.target.id, &offered)
+            .await
+            .is_err()
+    );
+    gateway.await.unwrap();
+    // The relay may have recorded this channel before its answer was lost.
+    assert!(relay.opened_at_relay(&offered));
+    assert!(!relay.opened_at_relay(&"01".repeat(16)));
 }

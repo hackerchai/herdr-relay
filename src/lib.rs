@@ -1,6 +1,7 @@
 pub mod access;
 pub mod client;
 pub mod control;
+pub mod direct;
 pub mod frame;
 pub mod host;
 pub mod identity;
@@ -16,6 +17,7 @@ pub mod service;
 pub mod stream;
 pub mod targets;
 pub mod terminal;
+pub mod timing;
 pub mod transport;
 pub mod tui;
 pub mod update;

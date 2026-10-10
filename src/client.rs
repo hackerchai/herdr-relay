@@ -116,8 +116,12 @@ pub async fn connect_remote(
                 crate::retry::wait(delay).await;
                 relay.check_identity()?;
                 check_version(binary).await?;
+                // Only a channel offered to the relay can hold relay state; a
+                // direct attempt must not depend on reaching the relay.
                 if let Some(channel) = previous.as_ref() {
-                    relay.release_channel(publisher, channel).await?;
+                    if relay.opened_at_relay(channel) {
+                        relay.release_channel(publisher, channel).await?;
+                    }
                     previous = None;
                 }
                 if native_failure.is_some() {

@@ -37,6 +37,12 @@ pub struct Relay {
     online_boot: tokio::sync::watch::Sender<Option<String>>,
     state_ready: Arc<std::sync::atomic::AtomicBool>,
     pending: Arc<tokio::sync::Semaphore>,
+    /// Present while the current control connection accepts acknowledgements.
+    control_acks: Arc<std::sync::Mutex<Option<ControlAcks>>>,
+    /// How the latest channel to each host was established.
+    routes: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::direct::Route>>>,
+    /// Channel ids offered to the relay, which may need relay-side release.
+    relay_channels: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +55,8 @@ struct Opened {
     grant_version: Option<u64>,
     #[serde(default)]
     limits: Option<crate::stream::Limits>,
+    #[serde(default)]
+    join_challenge: Option<Challenge>,
 }
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -61,6 +69,8 @@ enum Event {
         connector: String,
         boot_id: String,
         ticket: String,
+        #[serde(default)]
+        join_challenge: Option<Challenge>,
     },
     Access {
         channel_id: String,
@@ -72,10 +82,19 @@ enum Event {
         grant_version: u64,
         #[serde(default)]
         limits: Option<crate::stream::Limits>,
+        #[serde(default)]
+        join_challenge: Option<Challenge>,
     },
     RouteReady {
         channel_id: String,
         boot_id: String,
+    },
+    Authenticated {
+        channel_id: String,
+    },
+    AuthenticationFailed {
+        channel_id: String,
+        code: String,
     },
 }
 
@@ -107,7 +126,13 @@ impl Relay {
             origin.to_owned()
         };
         let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut features = reqwest::header::HeaderMap::new();
+        features.insert(
+            "X-Relay-Features",
+            reqwest::header::HeaderValue::from_static(crate::stream::FEATURES),
+        );
         let http = reqwest::Client::builder()
+            .default_headers(features)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(10))
@@ -124,6 +149,9 @@ impl Relay {
             online_boot: tokio::sync::watch::channel(None).0,
             state_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending: Arc::new(tokio::sync::Semaphore::new(4)),
+            control_acks: Default::default(),
+            routes: Default::default(),
+            relay_channels: Default::default(),
         })
     }
     pub(crate) fn check_identity(&self) -> Result<()> {
@@ -176,7 +204,25 @@ impl Relay {
         }
     }
     async fn proof(&self, method: &str, path: &str, payload: &str) -> Result<String> {
+        self.proof_with(method, path, payload, None).await
+    }
+    /// Sign a challenge the relay issued in advance when it names exactly this
+    /// operation; otherwise fetch a fresh one.
+    async fn proof_with(
+        &self,
+        method: &str,
+        path: &str,
+        payload: &str,
+        prepared: Option<Challenge>,
+    ) -> Result<String> {
         let public = access::public_key(&self.identity)?;
+        if let Some(challenge) =
+            prepared.filter(|c| c.issued_for(&self.origin, method, path, &public, payload))
+        {
+            crate::timing::mark("prepared_challenge");
+            return serde_json::to_string(&challenge.sign(&self.identity, pairing::now())?)
+                .map_err(|_| protocol());
+        }
         let hash = hex::encode(Sha256::digest(payload.as_bytes()));
         let request = serde_json::json!({"version":1,"origin":self.origin,"method":method,"path":path,"device_id":self.identity.id,"public_key":public,"payload_sha256":hash});
         let response = self
@@ -187,6 +233,7 @@ impl Relay {
             .await
             .map_err(network)?;
         let challenge: Challenge = response_json(response).await?;
+        crate::timing::mark("challenge");
         if challenge.origin != self.origin
             || challenge.method != method
             || challenge.path != path
@@ -218,8 +265,31 @@ impl Relay {
             .map_err(network)?;
         response_json(response).await
     }
-    async fn websocket(&self, path: &str, header: &str, value: &str) -> Result<Socket> {
-        let proof = self.proof("GET", path, value).await?;
+    /// Open an authenticated WebSocket; also returns the relay's advertised
+    /// capabilities. A rejected pre-issued challenge is retried once fresh.
+    async fn websocket_with(
+        &self,
+        path: &str,
+        header: &str,
+        value: &str,
+        prepared: Option<Challenge>,
+    ) -> Result<(Socket, String)> {
+        if prepared.is_some() {
+            match self.open_websocket(path, header, value, prepared).await {
+                Err(error) if error.code == "ACCESS_INVALID" => {}
+                result => return result,
+            }
+        }
+        self.open_websocket(path, header, value, None).await
+    }
+    async fn open_websocket(
+        &self,
+        path: &str,
+        header: &str,
+        value: &str,
+        prepared: Option<Challenge>,
+    ) -> Result<(Socket, String)> {
+        let proof = self.proof_with("GET", path, value, prepared).await?;
         let mut url = url::Url::parse(&format!("{}{}", self.base, path)).map_err(|_| protocol())?;
         url.set_scheme(if self.base.starts_with("https:") {
             "wss"
@@ -231,6 +301,10 @@ impl Relay {
         request
             .headers_mut()
             .insert("X-Relay-Proof", proof.parse().map_err(|_| protocol())?);
+        request.headers_mut().insert(
+            "X-Relay-Features",
+            crate::stream::FEATURES.parse().map_err(|_| protocol())?,
+        );
         request.headers_mut().insert(
             tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(header.as_bytes())
                 .map_err(|_| protocol())?,
@@ -248,7 +322,15 @@ impl Relay {
         )
         .await
         .map_err(|_| Error::new("NETWORK_LOST", "relay WebSocket connection timed out"))?;
-        result.map(|(socket, _)| socket).map_err(socket_error)
+        let (socket, response) = result.map_err(socket_error)?;
+        crate::timing::mark("websocket");
+        let features = response
+            .headers()
+            .get("X-Relay-Features")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        Ok((socket, features))
     }
     pub async fn register_invitation(&self, invitation: &Invitation) -> Result<()> {
         #[derive(Deserialize)]
@@ -279,7 +361,10 @@ impl Relay {
                 &invitation.publisher,
                 &channel,
                 "connector",
-                &opened.ticket,
+                Ticket {
+                    value: &opened.ticket,
+                    prepared: opened.join_challenge,
+                },
                 &opened.boot_id,
                 None,
             )
@@ -320,7 +405,14 @@ impl Relay {
         self.state_ready
             .store(false, std::sync::atomic::Ordering::Release);
         let path = format!("/v1/devices/{}/control", self.identity.id);
-        let mut socket = self.websocket(&path, "X-Relay-Boot", boot).await?;
+        let (mut socket, features) = self
+            .websocket_with(&path, "X-Relay-Boot", boot, None)
+            .await?;
+        let (acks, mut acknowledgements) = ControlAcks::new(boot.to_owned());
+        let acks = features
+            .split(',')
+            .any(|f| f.trim() == "control-authenticated")
+            .then_some(acks);
         match event(&mut socket).await? {
             Event::Online { boot_id } if boot_id == boot => {}
             _ => return Err(protocol()),
@@ -329,6 +421,10 @@ impl Relay {
         self.sync_state(boot, &registry).await?;
         self.state_ready
             .store(true, std::sync::atomic::Ordering::Release);
+        *self
+            .control_acks
+            .lock()
+            .expect("acknowledgement state poisoned") = acks.clone();
         eprintln!("Relay online: {}", self.origin);
         let mut tasks = tokio::task::JoinSet::new();
         let mut ping = tokio::time::interval(Duration::from_secs(25));
@@ -341,6 +437,9 @@ impl Relay {
                     tokio::time::timeout(Duration::from_secs(10),socket.send(Message::Ping(Vec::new().into()))).await.map_err(|_| disconnected())?.map_err(socket_error)?;
                 },
                 _ = tasks.join_next(), if !tasks.is_empty() => {},
+                Some(text) = acknowledgements.recv(), if acks.is_some() => {
+                    tokio::time::timeout(Duration::from_secs(10),socket.send(Message::Text(text.into()))).await.map_err(|_| disconnected())?.map_err(socket_error)?;
+                },
                 message = socket.next() => {
                     match message.ok_or_else(disconnected)?.map_err(socket_error)? {
                         Message::Pong(_) => last_seen = tokio::time::Instant::now(),
@@ -348,9 +447,14 @@ impl Relay {
                         Message::Text(text) => {
                             if text.len() > 8192 { return Err(protocol()); }
                             let event: Event = serde_json::from_str(&text).map_err(|_| protocol())?;
-                            let (channel_id,connector,boot_id,ticket,purpose,target_id,grant_version,limits) = match event {
-                                Event::Pair {channel_id,connector,boot_id,ticket} => (channel_id,connector,boot_id,ticket,Purpose::Pair,None,None,None),
-                                Event::Access {channel_id,connector,boot_id,ticket,purpose,target_id,grant_version,limits} if purpose != Purpose::Pair => (channel_id,connector,boot_id,ticket,purpose,target_id,Some(grant_version),limits),
+                            let event = match (event, acks.as_ref()) {
+                                (Event::Authenticated {channel_id}, Some(acks)) => { acks.resolve(&channel_id, Ok(())); continue; },
+                                (Event::AuthenticationFailed {channel_id,code}, Some(acks)) => { acks.resolve(&channel_id, Err(code)); continue; },
+                                (event, _) => event,
+                            };
+                            let (channel_id,connector,boot_id,ticket,purpose,target_id,grant_version,limits,prepared) = match event {
+                                Event::Pair {channel_id,connector,boot_id,ticket,join_challenge} => (channel_id,connector,boot_id,ticket,Purpose::Pair,None,None,None,join_challenge),
+                                Event::Access {channel_id,connector,boot_id,ticket,purpose,target_id,grant_version,limits,join_challenge} if purpose != Purpose::Pair => (channel_id,connector,boot_id,ticket,purpose,target_id,Some(grant_version),limits,join_challenge),
                                 _ => return Err(protocol()),
                             };
                             if boot_id != boot || connector == self.identity.id { return Err(protocol()); }
@@ -360,10 +464,11 @@ impl Relay {
                             context.validate()?;
                             let relay = self.clone();
                             let registry = registry.clone();
-                            tasks.spawn(async move {
+                            tasks.spawn(crate::timing::scope("serve", async move {
                                 let result = async {
                                     let permit=relay.pending.clone().try_acquire_owned().map_err(|_|Error::new("QUOTA_EXCEEDED","four handshakes are already pending"))?;
-                                    let stream = relay.join(&relay.identity.id,&channel_id,"publisher",&ticket,&boot_id,(context.purpose == Purpose::Attach).then_some(limits.unwrap_or_default())).await?;
+                                    let stream = relay.join(&relay.identity.id,&channel_id,"publisher",Ticket {value:&ticket,prepared},&boot_id,(context.purpose == Purpose::Attach).then_some(limits.unwrap_or_default())).await?;
+                                    crate::timing::mark("joined");
                                     if context.purpose == Purpose::Pair {
                                         let store = Store::open(&relay.profile,&relay.origin)?;
                                         // Admit the committed grant before returning its receipt, so
@@ -375,7 +480,7 @@ impl Relay {
                                     }
                                 }.await;
                                 if let Err(error) = result { eprintln!("Remote channel ended: {}",error.code); }
-                            });
+                            }));
                         },
                         _ => return Err(disconnected()),
                     }
@@ -383,6 +488,13 @@ impl Relay {
             }
         }}.await;
         // Abort and await native/TLS operations before a new publisher boot.
+        self.control_acks
+            .lock()
+            .expect("acknowledgement state poisoned")
+            .take();
+        if let Some(acks) = acks {
+            acks.close();
+        }
         tasks.shutdown().await;
         result
     }
@@ -391,15 +503,16 @@ impl Relay {
         publisher: &str,
         channel: &str,
         role: &str,
-        ticket: &str,
+        ticket: Ticket<'_>,
         boot: &str,
         limits: Option<crate::stream::Limits>,
     ) -> Result<ChannelStream> {
-        let mut socket = self
-            .websocket(
+        let (mut socket, _) = self
+            .websocket_with(
                 &format!("/v1/devices/{publisher}/channels/{channel}/{role}"),
                 "X-Relay-Ticket",
-                ticket,
+                ticket.value,
+                ticket.prepared,
             )
             .await?;
         match event(&mut socket).await? {
@@ -409,6 +522,7 @@ impl Relay {
             } if channel_id == channel && boot_id == boot => {}
             _ => return Err(protocol()),
         }
+        crate::timing::mark("route_ready");
         if let Some(limits) = limits {
             let id: [u8; 16] = hex::decode(channel)
                 .map_err(|_| protocol())?
@@ -421,13 +535,84 @@ impl Relay {
             Ok(Box::new(pair_stream(socket, channel)?))
         }
     }
+    /// How the latest channel to this host was established, if any.
+    pub fn route(&self, publisher: &str) -> Option<crate::direct::Route> {
+        self.routes
+            .lock()
+            .expect("route state poisoned")
+            .get(publisher)
+            .copied()
+    }
+    /// Whether this channel id was offered to the relay by this process.
+    pub fn opened_at_relay(&self, channel: &str) -> bool {
+        self.relay_channels
+            .lock()
+            .expect("channel state poisoned")
+            .contains(channel)
+    }
+    pub(crate) fn revocations(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.revocations.subscribe()
+    }
+    pub(crate) fn origin(&self) -> &str {
+        &self.origin
+    }
+    /// Open an authenticated channel, directly on a shared network when the
+    /// host advertised an endpoint, otherwise (or on any failure) via the relay.
     async fn access(
         &self,
         publisher: &str,
         target: Option<&str>,
         channel: &str,
-    ) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
+    ) -> Result<(
+        tokio_rustls::client::TlsStream<ChannelStream>,
+        crate::direct::Route,
+    )> {
         self.check_identity()?;
+        let purpose = if target.is_some() {
+            Purpose::Attach
+        } else {
+            Purpose::Control
+        };
+        let direct =
+            crate::direct::usable(&self.profile, &self.origin, publisher).map(|endpoint| {
+                let purpose = purpose.clone();
+                async move {
+                    let connected = crate::direct::connect(
+                        &endpoint,
+                        &self.profile,
+                        &self.origin,
+                        publisher,
+                        purpose,
+                        target,
+                    )
+                    .await
+                    .inspect_err(|_| crate::timing::mark("direct_failed"))?;
+                    Ok((connected.stream, connected.address))
+                }
+            });
+        let (result, route, failure) =
+            crate::direct::with_fallback(direct, || self.access_relay(publisher, target, channel))
+                .await;
+        if failure.is_some() {
+            crate::direct::back_off(&self.profile, &self.origin, publisher);
+        }
+        let stream = result?;
+        self.routes
+            .lock()
+            .expect("route state poisoned")
+            .insert(publisher.to_owned(), route);
+        Ok((stream, route))
+    }
+    async fn access_relay(
+        &self,
+        publisher: &str,
+        target: Option<&str>,
+        channel: &str,
+    ) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
+        self.relay_channels
+            .lock()
+            .expect("channel state poisoned")
+            .insert(channel.to_owned());
         let grant = host::grant(&self.profile, &self.origin, publisher, false)?;
         let purpose = if target.is_some() {
             Purpose::Attach
@@ -440,6 +625,7 @@ impl Relay {
                 &serde_json::json!({"channel_id":channel,"purpose":purpose,"target_id":target}),
             )
             .await?;
+        crate::timing::mark("access");
         if opened.channel_id != channel {
             return Err(protocol());
         }
@@ -466,7 +652,10 @@ impl Relay {
                 publisher,
                 channel,
                 "connector",
-                &opened.ticket,
+                Ticket {
+                    value: &opened.ticket,
+                    prepared: opened.join_challenge,
+                },
                 &opened.boot_id,
                 target.map(|_| opened.limits.unwrap_or_default()),
             )
@@ -501,6 +690,18 @@ impl Relay {
         let targets = registry.snapshot();
         let operation =
             host::serve_after_auth(stream, &self.profile, context, &targets, || async {
+                let acks = self
+                    .control_acks
+                    .lock()
+                    .expect("acknowledgement state poisoned")
+                    .clone()
+                    .filter(|acks| acks.boot == context.boot_id);
+                if let Some(acks) = acks {
+                    acks.authenticate(&context.channel_id).await?;
+                    crate::timing::mark("authenticated");
+                    drop(permit);
+                    return Ok(());
+                }
                 let result: serde_json::Value = self
                     .post(
                         &format!(
@@ -513,6 +714,7 @@ impl Relay {
                 if result["authenticated"] != true {
                     return Err(protocol());
                 }
+                crate::timing::mark("authenticated");
                 drop(permit);
                 Ok(())
             });
@@ -526,14 +728,11 @@ impl Relay {
         }
     }
     pub async fn targets(&self, publisher: &str) -> Result<Vec<TargetStatus>> {
-        let mut stream = self.access(publisher, None, &random_id()?).await?;
-        let response: host::Response = control::receive(&mut stream).await?;
-        let _ = control::send(&mut stream, &host::Ack {}).await;
-        match response {
-            host::Response::Targets { targets } => Ok(targets),
-            host::Response::Rejected { code } => Err(remote_error(&code)),
-            _ => Err(protocol()),
-        }
+        crate::timing::scope("targets", self.targets_inner(publisher)).await
+    }
+    async fn targets_inner(&self, publisher: &str) -> Result<Vec<TargetStatus>> {
+        let (stream, _) = self.access(publisher, None, &random_id()?).await?;
+        host::list_targets(stream, &self.profile, &self.origin, publisher).await
     }
     pub async fn release_channel(&self, publisher: &str, channel: &str) -> Result<()> {
         let response: serde_json::Value = self
@@ -553,11 +752,29 @@ impl Relay {
         target: &str,
         channel: &str,
     ) -> Result<PreparedAttach> {
-        let mut stream = self.access(publisher, Some(target), channel).await?;
-        match control::receive(&mut stream).await? {
-            host::Response::Ready { runtime_id } => Ok(PreparedAttach { stream, runtime_id }),
+        crate::timing::scope("prepare_attach", async {
+            let (mut stream, route) = self.access(publisher, Some(target), channel).await?;
+            self.ready(&mut stream)
+                .await
+                .map(|runtime_id| PreparedAttach {
+                    stream,
+                    runtime_id,
+                    route,
+                })
+        })
+        .await
+    }
+    async fn ready(
+        &self,
+        stream: &mut tokio_rustls::client::TlsStream<ChannelStream>,
+    ) -> Result<String> {
+        match control::receive(stream).await? {
+            host::Response::Ready { runtime_id } => {
+                crate::timing::mark("ready");
+                Ok(runtime_id)
+            }
             host::Response::Rejected { code } => {
-                let _ = control::send(&mut stream, &host::Ack {}).await;
+                let _ = control::send(stream, &host::Ack {}).await;
                 Err(remote_error(&code))
             }
             _ => Err(protocol()),
@@ -565,15 +782,28 @@ impl Relay {
     }
 }
 
+/// A one-use channel ticket and the join challenge the relay may have issued with it.
+struct Ticket<'a> {
+    value: &'a str,
+    prepared: Option<Challenge>,
+}
+
 pub struct PreparedAttach {
     stream: tokio_rustls::client::TlsStream<ChannelStream>,
     runtime_id: String,
+    route: crate::direct::Route,
 }
 impl PreparedAttach {
+    pub fn route(&self) -> crate::direct::Route {
+        self.route
+    }
     pub fn runtime_id(&self) -> &str {
         &self.runtime_id
     }
-    pub async fn start(mut self) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
+    pub async fn start(self) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
+        crate::timing::scope("start", self.start_inner()).await
+    }
+    async fn start_inner(mut self) -> Result<tokio_rustls::client::TlsStream<ChannelStream>> {
         control::send(
             &mut self.stream,
             &host::Start {
@@ -582,7 +812,10 @@ impl PreparedAttach {
         )
         .await?;
         match control::receive(&mut self.stream).await? {
-            host::Response::Started => Ok(self.stream),
+            host::Response::Started => {
+                crate::timing::mark("started");
+                Ok(self.stream)
+            }
             host::Response::Rejected { code } => {
                 let _ = control::send(&mut self.stream, &host::Ack {}).await;
                 Err(remote_error(&code))
@@ -725,7 +958,7 @@ fn network(error: reqwest::Error) -> Error {
 fn local_io(error: std::io::Error) -> Error {
     Error::new("CONNECTION_LOST", error.to_string())
 }
-fn remote_error(code: &str) -> Error {
+pub(crate) fn remote_error(code: &str) -> Error {
     let code = match code {
         "HOST_OFFLINE" => "HOST_OFFLINE",
         "TARGET_BUSY" => "TARGET_BUSY",
@@ -787,4 +1020,110 @@ fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> Error {
         return error;
     }
     disconnected()
+}
+
+/// Correlates relay acknowledgements on the publisher's control socket with
+/// the channel tasks waiting for them.
+#[derive(Clone)]
+pub(crate) struct ControlAcks {
+    boot: String,
+    outgoing: tokio::sync::mpsc::UnboundedSender<String>,
+    waiting: Arc<std::sync::Mutex<Waiting>>,
+}
+type Waiting = std::collections::HashMap<
+    String,
+    tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+>;
+impl ControlAcks {
+    pub(crate) fn new(boot: String) -> (Self, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        let (outgoing, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let acks = Self {
+            boot,
+            outgoing,
+            waiting: Default::default(),
+        };
+        (acks, receiver)
+    }
+    pub(crate) async fn authenticate(&self, channel: &str) -> Result<()> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.waiting
+            .lock()
+            .expect("acknowledgement map poisoned")
+            .insert(channel.to_owned(), reply);
+        let message =
+            serde_json::json!({"type":"authenticated","channel_id":channel,"boot_id":self.boot});
+        if self.outgoing.send(message.to_string()).is_err() {
+            self.waiting
+                .lock()
+                .expect("acknowledgement map poisoned")
+                .remove(channel);
+            return Err(disconnected());
+        }
+        match tokio::time::timeout(Duration::from_secs(10), answer).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(code))) => Err(remote_error(&code)),
+            Ok(Err(_)) | Err(_) => {
+                self.waiting
+                    .lock()
+                    .expect("acknowledgement map poisoned")
+                    .remove(channel);
+                Err(disconnected())
+            }
+        }
+    }
+    pub(crate) fn resolve(&self, channel: &str, result: std::result::Result<(), String>) {
+        if let Some(reply) = self
+            .waiting
+            .lock()
+            .expect("acknowledgement map poisoned")
+            .remove(channel)
+        {
+            let _ = reply.send(result);
+        }
+    }
+    /// Fail every waiting channel when the control connection ends.
+    pub(crate) fn close(&self) {
+        self.waiting
+            .lock()
+            .expect("acknowledgement map poisoned")
+            .clear();
+    }
+}
+
+#[cfg(test)]
+mod control_acks {
+    use super::ControlAcks;
+
+    #[tokio::test]
+    async fn a_reply_reaches_only_the_channel_it_names() {
+        let (acks, mut outgoing) = ControlAcks::new("bb".repeat(16));
+        let first = acks.clone();
+        let a = tokio::spawn(async move { first.authenticate(&"11".repeat(16)).await });
+        let second = acks.clone();
+        let b = tokio::spawn(async move { second.authenticate(&"22".repeat(16)).await });
+        let mut sent = [
+            outgoing.recv().await.unwrap(),
+            outgoing.recv().await.unwrap(),
+        ];
+        sent.sort();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&sent[0]).unwrap(),
+            serde_json::json!({"type":"authenticated","channel_id":"11".repeat(16),"boot_id":"bb".repeat(16)})
+        );
+        acks.resolve(&"22".repeat(16), Err("NOT_AUTHORIZED".into()));
+        acks.resolve(&"11".repeat(16), Ok(()));
+        assert!(a.await.unwrap().is_ok());
+        assert_eq!(b.await.unwrap().unwrap_err().code, "NOT_AUTHORIZED");
+    }
+
+    #[tokio::test]
+    async fn losing_the_control_connection_fails_every_waiting_channel() {
+        let (acks, outgoing) = ControlAcks::new("bb".repeat(16));
+        let waiting = acks.clone();
+        let task = tokio::spawn(async move { waiting.authenticate(&"11".repeat(16)).await });
+        tokio::task::yield_now().await;
+        drop(outgoing);
+        acks.close();
+        assert_eq!(task.await.unwrap().unwrap_err().code, "NETWORK_LOST");
+    }
 }

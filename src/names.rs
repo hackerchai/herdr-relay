@@ -119,8 +119,23 @@ pub struct HostName {
     pub alias: String,
 }
 
-fn read(profile: &Path) -> Result<Vec<HostName>> {
-    let path = profile.join("host-names.json");
+/// Hosts this device accesses (with local aliases), or devices that access it.
+#[derive(Clone, Copy)]
+struct Book {
+    names: &'static str,
+    lock: &'static str,
+}
+const HOSTS: Book = Book {
+    names: "host-names.json",
+    lock: "host-names.lock",
+};
+const PEERS: Book = Book {
+    names: "peer-names.json",
+    lock: "peer-names.lock",
+};
+
+fn read(profile: &Path, book: Book) -> Result<Vec<HostName>> {
+    let path = profile.join(book.names);
     let file = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
@@ -160,6 +175,63 @@ pub fn remember(
     name: Option<&str>,
     alias: Option<&str>,
 ) -> Result<HostName> {
+    remember_in(profile, HOSTS, origin, identity, name, alias)
+}
+
+/// Apply the hostname a host reported inside its authenticated channel. An
+/// alias the user never customized follows the new name.
+pub fn refresh_host(profile: &Path, origin: &str, identity: &str, hostname: &str) -> Result<()> {
+    if !valid_name(hostname) {
+        return Err(Error::new("HOST_NAME", "invalid reported hostname"));
+    }
+    let current = read(profile, HOSTS)?
+        .into_iter()
+        .find(|r| r.origin == origin && r.identity == identity);
+    // Only the name itself or its de-duplicated "name (N)" form is automatic.
+    let automatic = current.as_ref().is_none_or(|r| {
+        r.alias == r.name
+            || r.alias
+                .strip_prefix(&format!("{} (", r.name))
+                .and_then(|rest| rest.strip_suffix(')'))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    });
+    if current.as_ref().is_some_and(|r| r.name == hostname) {
+        return Ok(());
+    }
+    remember_in(
+        profile,
+        HOSTS,
+        origin,
+        identity,
+        Some(hostname),
+        automatic.then_some(""),
+    )
+    .map(|_| ())
+}
+
+/// Record the hostname a paired client reported to this host.
+pub fn remember_peer(profile: &Path, origin: &str, identity: &str, hostname: &str) -> Result<()> {
+    if peer_name(profile, origin, identity).as_deref() == Some(hostname) {
+        return Ok(());
+    }
+    remember_in(profile, PEERS, origin, identity, Some(hostname), Some("")).map(|_| ())
+}
+pub fn peer_name(profile: &Path, origin: &str, identity: &str) -> Option<String> {
+    read(profile, PEERS)
+        .ok()?
+        .into_iter()
+        .find(|r| r.origin == origin && r.identity == identity)
+        .map(|r| r.name)
+}
+
+fn remember_in(
+    profile: &Path,
+    book: Book,
+    origin: &str,
+    identity: &str,
+    name: Option<&str>,
+    alias: Option<&str>,
+) -> Result<HostName> {
     crate::identity::private_directory(profile, false)?;
     let lock = OpenOptions::new()
         .read(true)
@@ -167,13 +239,16 @@ pub fn remember(
         .create(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(profile.join("host-names.lock"))
+        .open(profile.join(book.lock))
         .map_err(storage)?;
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
         return Err(storage(std::io::Error::last_os_error()));
     }
-    let mut records = read(profile)?;
-    if name.is_some_and(|n| !valid_name(n)) || alias.is_some_and(|n| !valid_name(n)) {
+    let mut records = read(profile, book)?;
+    // An empty alias resets to the automatic, name-derived alias.
+    if name.is_some_and(|n| !valid_name(n))
+        || alias.is_some_and(|n| !n.trim().is_empty() && !valid_name(n))
+    {
         return Err(Error::new(
             "HOST_NAME",
             "use a name of 1-128 bytes without terminal control characters",
@@ -240,7 +315,7 @@ pub fn remember(
         .and_then(|_| stage.as_file().sync_all())
         .map_err(storage)?;
     stage
-        .persist(profile.join("host-names.json"))
+        .persist(profile.join(book.names))
         .map_err(|e| storage(e.error))?;
     File::open(profile)
         .and_then(|f| f.sync_all())

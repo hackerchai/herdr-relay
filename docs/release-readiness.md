@@ -15,7 +15,7 @@ hostname is `herdr-relay.hackerchai.com`; the monthly project ceiling is USD 10.
 | Rust/TypeScript and upstream checks | Release CI passed on Linux/macOS | [Successful release run](https://github.com/hackerchai/herdr-relay/actions/runs/38040201479); 50 Rust tests per OS, 7 TypeScript tests, 32 upstream regressions and 3 publication tests |
 | License and publication | MIT; public source repository, binaries and crate | Crate explicitly includes Worker source and patch materials |
 | Production Worker | 0.2.1 deployed; real CLI/service upgrade and native reconnect passed | [Successful release run](https://github.com/hackerchai/herdr-relay/actions/runs/38040201479); detailed production checks are kept locally |
-| Budget | Retain Workers Free, below USD 10 | Provider rejects paid-only CPU setting with error 100328; CI rejects a paid Workers/DO subscription |
+| Budget | Workers Paid (USD 5 base) with application quotas bounding usage | CI reports the plan before deploying; production quotas cap requests, channels and daily channel time |
 | Retention | Existing defaults retained | 25-hour offline mirrors; [other TTLs](operations.md); no application payload logs |
 | Availability and service scope | Best effort; user services | No SLA, forced logout test or system service promise |
 | Public crate and release handoff | Published and verified | [Public 0.2.1 crate](https://crates.io/crates/herdr-relay/0.2.1) and [public binary assets and checksums](https://github.com/hackerchai/herdr-relay-releases/releases/tag/v0.2.1) |

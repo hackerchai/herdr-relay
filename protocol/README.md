@@ -2,7 +2,8 @@
 
 Original draft: 2026-10-09. This document records the proposed protocol and its
 invariants; it does not declare frozen wire compatibility. For implemented
-admission messages and routing, see [access-v1.md](access-v1.md). Shared signature
+admission messages and routing, see [access-v1.md](access-v1.md); negotiated
+extensions and the direct LAN path are in [capabilities.md](capabilities.md). Shared signature
 and frame examples are in [fixtures/](fixtures/). Product requirements are tracked
 in [GitHub Issues](https://github.com/hackerchai/herdr-relay/issues).
 

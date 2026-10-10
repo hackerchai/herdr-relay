@@ -104,3 +104,139 @@ async fn a_peer_that_answers_pings_but_never_consumes_data_cannot_hold_a_channel
     .await
     .expect("a stalled credit window survived its 30-second progress deadline");
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_keystroke_after_a_burst_does_not_wait_for_a_full_chunk_of_budget() {
+    let (a, b) = tokio::io::duplex(1024 * 1024);
+    let (a, b) = tokio::join!(
+        WebSocketStream::from_raw_socket(a, Role::Client, None),
+        WebSocketStream::from_raw_socket(b, Role::Server, None)
+    );
+    let (_ar, mut aw) = tokio::io::split(websocket_stream(a, &[4; 16]));
+    let (mut br, _bw) = tokio::io::split(websocket_stream(b, &[4; 16]));
+    // The default 256 KiB/s limit allows a 512 KiB burst; spend all of it.
+    let burst = 512 * 1024;
+    let send = async { aw.write_all(&vec![1; burst]).await.unwrap() };
+    let receive = async {
+        let mut data = vec![0; burst];
+        br.read_exact(&mut data).await.unwrap();
+    };
+    tokio::join!(send, receive);
+    let began = tokio::time::Instant::now();
+    aw.write_all(b"k").await.unwrap();
+    let mut key = [0; 1];
+    br.read_exact(&mut key).await.unwrap();
+    assert_eq!(&key, b"k");
+    let waited = began.elapsed();
+    // Refilling one byte takes microseconds; a full 16 KiB chunk takes ~66 ms.
+    assert!(
+        waited < std::time::Duration::from_millis(5),
+        "a one-byte message waited {waited:?} for unrelated budget"
+    );
+}
+
+fn v2() -> herdr_relay::stream::Limits {
+    herdr_relay::stream::Limits {
+        bytes_per_second: 1048576,
+        window: Some(262144),
+    }
+}
+
+/// Collect Data payload bytes a raw peer receives until nothing arrives for 50 ms.
+async fn drain_data<S>(peer: &mut WebSocketStream<S>) -> (usize, Vec<u64>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use futures_util::StreamExt;
+    use herdr_relay::frame::{Frame, Kind};
+    use tokio_tungstenite::tungstenite::Message;
+    let (mut data, mut credits) = (0, vec![]);
+    while let Ok(Some(Ok(message))) =
+        tokio::time::timeout(std::time::Duration::from_millis(50), peer.next()).await
+    {
+        if let Message::Binary(bytes) = message {
+            let frame = Frame::decode(&bytes).unwrap();
+            match frame.kind {
+                Kind::Data => data += frame.payload.len(),
+                Kind::Credit => credits.push(frame.offset),
+            }
+        }
+    }
+    (data, credits)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_negotiated_window_keeps_more_data_in_flight_than_the_legacy_window() {
+    for (limits, expected) in [
+        (herdr_relay::stream::Limits::default(), 65536),
+        (v2(), 262144),
+    ] {
+        let (a, b) = tokio::io::duplex(4 * 1024 * 1024);
+        let a = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
+        let mut peer = WebSocketStream::from_raw_socket(b, Role::Server, None).await;
+        let mut stream =
+            herdr_relay::stream::websocket_stream_with_limits(a, &[5; 16], limits).unwrap();
+        let writer = tokio::spawn(async move {
+            let _ = stream.write_all(&vec![1; 512 * 1024]).await;
+            stream
+        });
+        let (data, _) = drain_data(&mut peer).await;
+        assert_eq!(data, expected);
+        writer.abort();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn credits_are_not_delayed_by_spent_data_messages_once_v2_is_negotiated() {
+    use futures_util::{SinkExt, StreamExt};
+    use herdr_relay::frame::{Frame, Kind};
+    use tokio_tungstenite::tungstenite::Message;
+    for (limits, delayed) in [
+        (herdr_relay::stream::Limits::default(), true),
+        (v2(), false),
+    ] {
+        let (a, b) = tokio::io::duplex(4 * 1024 * 1024);
+        let a = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
+        let mut peer = WebSocketStream::from_raw_socket(b, Role::Server, None).await;
+        let stream =
+            herdr_relay::stream::websocket_stream_with_limits(a, &[6; 16], limits).unwrap();
+        let (mut reader, mut writer) = tokio::io::split(stream);
+        let mut next = async || loop {
+            if let Message::Binary(bytes) = peer.next().await.unwrap().unwrap() {
+                let frame = Frame::decode(&bytes).unwrap();
+                break (frame.kind, frame.offset);
+            }
+        };
+        // Spend the whole data message burst with one-byte keystrokes.
+        for offset in 0..300 {
+            writer.write_all(b"k").await.unwrap();
+            assert_eq!(next().await, (Kind::Data, offset));
+        }
+        let began = tokio::time::Instant::now();
+        let frame = Frame {
+            kind: Kind::Data,
+            channel: [6; 16],
+            offset: 0,
+            payload: b"x",
+        }
+        .encode()
+        .unwrap();
+        peer.send(Message::Binary(frame.into())).await.unwrap();
+        let mut byte = [0; 1];
+        reader.read_exact(&mut byte).await.unwrap();
+        let mut next = async || loop {
+            if let Message::Binary(bytes) = peer.next().await.unwrap().unwrap() {
+                let frame = Frame::decode(&bytes).unwrap();
+                break (frame.kind, frame.offset);
+            }
+        };
+        assert_eq!(next().await, (Kind::Credit, 1));
+        // A shared, spent 150 message/s budget needs ~7 ms to refill one message.
+        assert_eq!(
+            began.elapsed() >= std::time::Duration::from_millis(5),
+            delayed,
+            "credit took {:?}",
+            began.elapsed()
+        );
+    }
+}

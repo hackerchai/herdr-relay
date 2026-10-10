@@ -86,6 +86,22 @@ impl Challenge {
             self.payload_sha256
         ))
     }
+    /// Whether a challenge names exactly this operation. A pre-issued
+    /// challenge for anything else must not be signed.
+    pub fn issued_for(
+        &self,
+        origin: &str,
+        method: &str,
+        path: &str,
+        public_key: &str,
+        payload: &str,
+    ) -> bool {
+        self.origin == origin
+            && self.method == method
+            && self.path == path
+            && self.public_key == public_key
+            && self.payload_sha256 == hex::encode(Sha256::digest(payload.as_bytes()))
+    }
     pub fn sign(self, identity: &Identity, now: u64) -> Result<Proof> {
         let bytes = self.canonical()?;
         let expiration: u64 = self.expires_at.parse().map_err(|_| invalid())?;

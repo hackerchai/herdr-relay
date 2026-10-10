@@ -42,6 +42,12 @@ herdr-relay pair
 Paste the link and choose a host and session. For later connections, just run
 `herdr-relay`. The default hosted Relay requires no account or Cloudflare setup.
 
+When both computers share a LAN or tailnet, Herdr Relay connects directly with
+the same end-to-end encryption and falls back to the relay otherwise; the host
+menu shows which path each host uses. Allow TCP port 47120 on the host's
+firewall to use it. On macOS, the app running `herdr-relay` may need Local
+Network permission.
+
 ## In action
 
 Choose a shared session by name, then connect to its agent workspace.

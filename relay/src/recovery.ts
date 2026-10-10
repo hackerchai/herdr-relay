@@ -1,5 +1,14 @@
 import { isHex } from './protocol.ts';
-import { WINDOW, quotas, type Flow } from './limits.ts';
+import {
+  MAX_WINDOW,
+  WINDOW,
+  burstOf,
+  quotas,
+  rowLimits,
+  windowOf,
+  type Flow,
+  type Limits,
+} from './limits.ts';
 
 export interface RestoredChannel {
   id: string;
@@ -12,8 +21,11 @@ export interface RestoredChannel {
   expires: number;
   purpose: string;
   rate: number;
+  /** Zero for a legacy channel; otherwise the negotiated stream v2 window. */
+  window?: number;
 }
-function flowValid(value: unknown, rate: number): value is Flow {
+function flowValid(value: unknown, limits: Limits): value is Flow {
+  const window = windowOf(limits);
   if (!value || typeof value !== 'object') return false;
   const f = value as Flow;
   const offset = (n: unknown) =>
@@ -25,16 +37,19 @@ function flowValid(value: unknown, rate: number): value is Flow {
     f.progress >= 0 &&
     Number.isInteger(f.peak) &&
     f.peak >= 0 &&
-    f.peak <= WINDOW &&
+    f.peak <= window &&
     !!f.budget &&
     Number.isSafeInteger(f.budget.at) &&
     f.budget.at >= 0 &&
     Number.isFinite(f.budget.bytes) &&
     f.budget.bytes >= 0 &&
-    f.budget.bytes <= Math.max(WINDOW, rate * 2) &&
+    f.budget.bytes <= burstOf(limits) &&
     Number.isFinite(f.budget.messages) &&
     f.budget.messages >= 0 &&
-    f.budget.messages <= 300
+    f.budget.messages <= 300 &&
+    (limits.window === undefined
+      ? f.budget.credits === undefined
+      : Number.isFinite(f.budget.credits) && f.budget.credits! >= 0 && f.budget.credits! <= 300)
   );
 }
 /** A missing consumed role must never be recreated from its SQL ticket bit. */
@@ -52,6 +67,13 @@ export function restoredChannelValid(
     )
       return false;
     quotas({ CHANNEL_BYTES_PER_SECOND: String(row.rate) });
+    if (
+      row.window &&
+      (!Number.isSafeInteger(row.window) || row.window < WINDOW || row.window > MAX_WINDOW)
+    )
+      return false;
+    if (!row.window && row.rate > 262144) return false;
+    const limits = rowLimits(row);
     if (
       ![0, 1].includes(row.host_used) ||
       ![0, 1].includes(row.client_used) ||
@@ -80,7 +102,9 @@ export function restoredChannelValid(
         !a.limits ||
         typeof a.limits !== 'object' ||
         (a.limits as Record<string, unknown>).bytes_per_second !== row.rate ||
-        !flowValid(a.flow, row.rate)
+        (a.limits as Record<string, unknown>).window !== limits.window ||
+        Object.keys(a.limits).length !== (limits.window === undefined ? 1 : 2) ||
+        !flowValid(a.flow, limits)
       )
         throw Error();
       roles.add(a.role);
@@ -92,7 +116,7 @@ export function restoredChannelValid(
         [pairs[1], pairs[0]],
       ]) {
         const outstanding = BigInt(a.flow.sent) - BigInt(b.flow.ack);
-        if (outstanding < 0n || outstanding > BigInt(WINDOW)) return false;
+        if (outstanding < 0n || outstanding > BigInt(windowOf(limits))) return false;
       }
     }
     return true;

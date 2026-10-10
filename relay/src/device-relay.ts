@@ -11,7 +11,16 @@ import {
   strictJson,
 } from './protocol.ts';
 import { decodeFrame } from './frame.ts';
-import { acceptFrame, initialFlow, quotas, type Flow, type Limits } from './limits.ts';
+import {
+  acceptFrame,
+  MAX_WINDOW,
+  channelLimits,
+  initialFlow,
+  rowLimits,
+  quotas,
+  type Flow,
+  type Limits,
+} from './limits.ts';
 import { restoredChannelValid } from './recovery.ts';
 import type { Env } from './index.ts';
 import { ADMISSION_OBJECT, admitted } from './admission.ts';
@@ -24,6 +33,10 @@ type Control = {
   ready: boolean;
   expires: number;
   renewAt?: number;
+  /** Optional capabilities the publisher advertised on its control upgrade. */
+  features?: string[];
+  /** Verified proof key, kept only to pre-issue join challenges. */
+  public_key?: string;
 };
 type Pair = {
   kind: 'pair';
@@ -56,10 +69,13 @@ type Channel = {
   grant_version: number;
   authenticated: number;
   rate: number;
+  window: number;
 };
 
 export class DeviceRelay extends DurableObject<Env> {
   private readonly instance = randomHex();
+  /** Channel expiries read from SQL; only ever raised by renewal, dropped on end. */
+  private readonly expiries = new Map<string, number>();
   private readonly constructedAt = Date.now();
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -87,6 +103,8 @@ export class DeviceRelay extends DurableObject<Env> {
       );
     if (!columns.includes('rate'))
       ctx.storage.sql.exec('ALTER TABLE channels ADD COLUMN rate INTEGER NOT NULL DEFAULT 262144');
+    if (!columns.includes('window'))
+      ctx.storage.sql.exec('ALTER TABLE channels ADD COLUMN window INTEGER NOT NULL DEFAULT 0');
     ctx.storage.sql.exec(
       'CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY,value INTEGER NOT NULL)',
     );
@@ -157,31 +175,8 @@ export class DeviceRelay extends DurableObject<Env> {
       }
       if (destination.operation === 'authenticated') {
         const body = record(strictJson(await boundedBody(request)), ['boot_id']);
-        const row = this.ctx.storage.sql
-          .exec<Channel>('SELECT * FROM channels WHERE id=?', destination.channel!)
-          .toArray()[0];
-        if (
-          device !== host.device ||
-          body.boot_id !== host.boot ||
-          !row ||
-          row.boot !== host.boot ||
-          !row.host_used ||
-          !row.client_used ||
-          row.purpose === 'pair' ||
-          !this.current(row)
-        )
-          throw new ProtocolError('NOT_AUTHORIZED', 403);
-        await this.env.ADMISSION.getByName(ADMISSION_OBJECT).authenticated(
-          'channel:' + row.publisher + ':' + row.id,
-          row.reservation,
-        );
-        if (!this.current(row)) throw new ProtocolError('CHANNEL_EXPIRED', 409);
-        this.ctx.storage.sql.exec(
-          'UPDATE channels SET authenticated=1 WHERE id=? AND reservation=?',
-          row.id,
-          row.reservation,
-        );
-        await this.ctx.storage.sync();
+        if (device !== host.device) throw new ProtocolError('NOT_AUTHORIZED', 403);
+        await this.authenticate(host, body.boot_id, destination.channel!);
         return Response.json({ authenticated: true });
       }
       if (destination.operation === 'status') {
@@ -242,6 +237,71 @@ export class DeviceRelay extends DurableObject<Env> {
       this.ctx.waitUntil(this.arm());
     }
   }
+  /** Record that both endpoints completed mutual authentication. */
+  private async authenticate(host: Control, boot: unknown, channel: string): Promise<void> {
+    const row = this.ctx.storage.sql
+      .exec<Channel>('SELECT * FROM channels WHERE id=?', channel)
+      .toArray()[0];
+    if (
+      boot !== host.boot ||
+      !row ||
+      row.boot !== host.boot ||
+      !row.host_used ||
+      !row.client_used ||
+      row.purpose === 'pair' ||
+      !this.current(row)
+    )
+      throw new ProtocolError('NOT_AUTHORIZED', 403);
+    await this.env.ADMISSION.getByName(ADMISSION_OBJECT).authenticated(
+      'channel:' + row.publisher + ':' + row.id,
+      row.reservation,
+    );
+    if (!this.current(row)) throw new ProtocolError('CHANNEL_EXPIRED', 409);
+    this.ctx.storage.sql.exec(
+      'UPDATE channels SET authenticated=1 WHERE id=? AND reservation=?',
+      row.id,
+      row.reservation,
+    );
+    await this.ctx.storage.sync();
+  }
+  /** The only message a publisher may send on its already authenticated control socket. */
+  private async controlMessage(ws: WebSocket, host: Control, message: string): Promise<void> {
+    let channel: string;
+    try {
+      const body = record(strictJson(message), ['type', 'channel_id', 'boot_id']);
+      if (
+        body.type !== 'authenticated' ||
+        !isHex(body.channel_id, 32) ||
+        body.boot_id !== host.boot
+      )
+        throw new ProtocolError();
+      channel = body.channel_id;
+    } catch {
+      this.endControl(ws, host.boot);
+      return;
+    }
+    let reply: Record<string, unknown>;
+    try {
+      // The same lease and readiness checks as the HTTP acknowledgement.
+      await this.expire();
+      const current = ws.deserializeAttachment() as Control | null;
+      if (this.control() !== ws || !current?.ready || current.expires <= Date.now())
+        throw new ProtocolError('HOST_OFFLINE', 409);
+      await this.authenticate(current, current.boot, channel);
+      reply = { type: 'authenticated', channel_id: channel };
+    } catch (error) {
+      reply = {
+        type: 'authentication_failed',
+        channel_id: channel,
+        code: error instanceof ProtocolError ? error.code : 'RELAY_BUSY',
+      };
+    }
+    try {
+      ws.send(JSON.stringify(reply));
+    } catch {
+      /* the control connection already ended */
+    }
+  }
   private async publish(request: Request, device: string, publisher: string): Promise<Response> {
     this.upgrade(request);
     const boot = request.headers.get('X-Relay-Boot');
@@ -270,10 +330,19 @@ export class DeviceRelay extends DurableObject<Env> {
       ready: false,
       expires: lease.expires!,
       renewAt: lease.expires! - PUBLISHER_LEASE_MS / 2,
+      features: [...features(request)],
+      ...(features(request).has(PREPARED_JOIN) &&
+      isHex(request.headers.get('X-Relay-Public-Key'), 64)
+        ? { public_key: request.headers.get('X-Relay-Public-Key')! }
+        : {}),
     } satisfies Control);
     server.send(JSON.stringify({ type: 'online', boot_id: boot }));
     await this.arm();
-    return new Response(null, { status: 101, webSocket: client });
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { 'X-Relay-Features': RELAY_FEATURES },
+    });
   }
   private async openPair(
     request: Request,
@@ -309,6 +378,10 @@ export class DeviceRelay extends DurableObject<Env> {
       )
         throw new ProtocolError('TARGET_NOT_SHARED', 409);
     } else if (!isHex(body.invitation_id, 32)) throw new ProtocolError();
+    const stream = channelLimits(
+      limits.stream,
+      features(request).has(STREAM_V2) && !!host.features?.includes(STREAM_V2),
+    );
     const hostTicket = randomHex(32),
       clientTicket = randomHex(32);
     const [hostHash, clientHash] = await Promise.all([digest(hostTicket), digest(clientTicket)]);
@@ -388,7 +461,7 @@ export class DeviceRelay extends DurableObject<Env> {
         )
           throw new ProtocolError('QUOTA_EXCEEDED', 429);
         this.ctx.storage.sql.exec(
-          'INSERT INTO channels (id,reservation,publisher,connector,boot,host_ticket,client_ticket,host_used,client_used,expires,purpose,target,grant_version,authenticated,rate) VALUES (?,?,?,?,?,?,?,0,0,?,?,?,?,0,?)',
+          'INSERT INTO channels (id,reservation,publisher,connector,boot,host_ticket,client_ticket,host_used,client_used,expires,purpose,target,grant_version,authenticated,rate,window) VALUES (?,?,?,?,?,?,?,0,0,?,?,?,?,0,?,?)',
           body.channel_id as string,
           reservation,
           host.device,
@@ -400,7 +473,8 @@ export class DeviceRelay extends DurableObject<Env> {
           purpose as string,
           target as string,
           grantVersion,
-          limits.stream.bytes_per_second,
+          stream.bytes_per_second,
+          stream.window ?? 0,
         );
       });
     } catch (error) {
@@ -418,6 +492,22 @@ export class DeviceRelay extends DurableObject<Env> {
       this.endChannel(body.channel_id, reservation, 'HOST_OFFLINE');
       throw new ProtocolError('HOST_OFFLINE', 409);
     }
+    // Pre-issue the publisher's join challenge so joining needs no extra round trip.
+    const joinChallenge =
+      host.features?.includes(PREPARED_JOIN) && host.public_key
+        ? await prepareJoin(
+            this.env,
+            host.device,
+            host.public_key,
+            `/v1/devices/${host.device}/channels/${body.channel_id}/publisher`,
+            hostTicket,
+          )
+        : undefined;
+    if (this.control() !== control) {
+      this.endChannel(body.channel_id, reservation, 'HOST_OFFLINE');
+      throw new ProtocolError('HOST_OFFLINE', 409);
+    }
+    const prepared = joinChallenge ? { join_challenge: joinChallenge } : {};
     control.send(
       JSON.stringify(
         access
@@ -430,7 +520,8 @@ export class DeviceRelay extends DurableObject<Env> {
               purpose,
               target_id: target || null,
               grant_version: grantVersion,
-              limits: limits.stream,
+              limits: stream,
+              ...prepared,
             }
           : {
               type: 'pair',
@@ -438,6 +529,7 @@ export class DeviceRelay extends DurableObject<Env> {
               connector: device,
               boot_id: host.boot,
               ticket: hostTicket,
+              ...prepared,
             },
       ),
     );
@@ -448,7 +540,7 @@ export class DeviceRelay extends DurableObject<Env> {
         boot_id: host.boot,
         ticket: clientTicket,
         grant_version: access ? grantVersion : null,
-        limits: limits.stream,
+        limits: stream,
       },
       { headers: { 'Cache-Control': 'no-store' } },
     );
@@ -510,8 +602,8 @@ export class DeviceRelay extends DurableObject<Env> {
       purpose: row.purpose as Pair['purpose'],
       ready: false,
       expires: row.expires,
-      flow: initialFlow(Date.now(), { bytes_per_second: row.rate }),
-      limits: { bytes_per_second: row.rate },
+      flow: initialFlow(Date.now(), rowLimits(row)),
+      limits: rowLimits(row),
       messages: 0,
     } satisfies Pair);
     const peers = this.channelSockets(channel, row.reservation);
@@ -553,6 +645,7 @@ export class DeviceRelay extends DurableObject<Env> {
           channel,
           row.reservation,
         );
+        this.expiries.set(channel + ':' + row.reservation, expires);
         await this.arm();
       }
       for (const ws of peers) {
@@ -564,13 +657,15 @@ export class DeviceRelay extends DurableObject<Env> {
     }
     return new Response(null, { status: 101, webSocket: client });
   }
-  webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): void {
+  async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
     const state = ws.deserializeAttachment() as Attachment | null;
     if (!state) {
       this.close(ws, 'PROTOCOL_ERROR');
       return;
     }
     if (state.kind === 'control') {
+      if (typeof message === 'string' && state.features?.includes(CONTROL_AUTHENTICATED))
+        return this.controlMessage(ws, state, message);
       this.endControl(ws, state.boot);
       return;
     }
@@ -578,25 +673,25 @@ export class DeviceRelay extends DurableObject<Env> {
       const host = this.control()?.deserializeAttachment() as Control | undefined;
       if (this.env.ADMISSION_ENABLED !== 'true' || !host || host.expires <= Date.now())
         throw new ProtocolError('RELAY_BUSY', 503);
-      const row = this.ctx.storage.sql
-        .exec<Channel>(
-          'SELECT * FROM channels WHERE id=? AND reservation=?',
-          state.channel,
-          state.reservation,
-        )
-        .toArray()[0];
-      if (typeof message === 'string' || !state.ready || !row || row.expires <= Date.now())
+      if (
+        typeof message === 'string' ||
+        !state.ready ||
+        this.channelExpiry(state.channel, state.reservation) <= Date.now()
+      )
         throw new ProtocolError();
       const frame = decodeFrame(message);
       state.messages = Math.min(state.messages + 1, Number.MAX_SAFE_INTEGER);
       if (frame.channel !== state.channel || (state.purpose !== 'attach' && state.messages > 256))
         throw new ProtocolError();
-      const peers = this.channelSockets(state.channel, state.reservation).filter(
-        (peer) => peer !== ws,
-      );
+      // Deserialize each peer attachment once per message.
+      const peers: [WebSocket, Pair][] = [];
+      for (const candidate of this.ctx.getWebSockets('channel:' + state.channel)) {
+        if (candidate === ws || candidate.readyState !== WebSocket.OPEN) continue;
+        const attachment = candidate.deserializeAttachment() as Pair;
+        if (attachment.reservation === state.reservation) peers.push([candidate, attachment]);
+      }
       if (peers.length !== 1) throw new ProtocolError();
-      const peer = peers[0],
-        other = peer.deserializeAttachment() as Pair;
+      const [peer, other] = peers[0];
       if (other.boot !== state.boot || other.role === state.role || !other.ready)
         throw new ProtocolError();
       if (!state.flow || !other.flow) throw new ProtocolError('PROTOCOL_CHANGED', 409);
@@ -659,13 +754,31 @@ export class DeviceRelay extends DurableObject<Env> {
     for (const row of rows) this.endChannel(row.id, row.reservation, 'HOST_OFFLINE');
     this.ctx.waitUntil(this.arm());
   }
+  /** The current channel expiry; SQL is read only when the cached value has passed. */
+  private channelExpiry(channel: string, reservation: string): number {
+    const key = channel + ':' + reservation;
+    const cached = this.expiries.get(key);
+    if (cached !== undefined && cached > Date.now()) return cached;
+    const row = this.ctx.storage.sql
+      .exec<{
+        expires: number;
+      }>('SELECT expires FROM channels WHERE id=? AND reservation=?', channel, reservation)
+      .toArray()[0];
+    if (!row) {
+      this.expiries.delete(key);
+      return 0;
+    }
+    this.expiries.set(key, row.expires);
+    return row.expires;
+  }
   private endChannel(channel: string, reservation: string, reason: string): void {
+    this.expiries.delete(channel + ':' + reservation);
     const sockets = this.channelSockets(channel, reservation);
     const peak = Math.max(
       0,
       ...sockets.map((ws) => {
         const n = (ws.deserializeAttachment() as Pair).flow?.peak;
-        return Number.isInteger(n) && n >= 0 && n <= 65536 ? n : 0;
+        return Number.isInteger(n) && n >= 0 && n <= MAX_WINDOW ? n : 0;
       }),
     );
     if (peak)
@@ -1036,6 +1149,7 @@ export class DeviceRelay extends DurableObject<Env> {
         row.id,
         row.reservation,
       );
+      this.expiries.set(row.id + ':' + row.reservation, expires);
     }
     await this.arm();
   }
@@ -1102,4 +1216,45 @@ export class DeviceRelay extends DurableObject<Env> {
     await this.ctx.storage.sync();
     return Response.json({ registered: true });
   }
+}
+
+export const STREAM_V2 = 'stream-v2';
+export const CONTROL_AUTHENTICATED = 'control-authenticated';
+export const PREPARED_JOIN = 'prepared-join';
+/** Capabilities this relay offers, advertised on the control upgrade. */
+export const RELAY_FEATURES = [STREAM_V2, CONTROL_AUTHENTICATED, PREPARED_JOIN].join(',');
+/** Issue a join challenge in advance; failure only costs the old extra round trip. */
+export async function prepareJoin(
+  env: Env,
+  device: string,
+  publicKey: string,
+  path: string,
+  ticket: string,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    return (await env.AUTH.getByName('device:' + device).issue(
+      {
+        version: 1,
+        origin: env.RELAY_ORIGIN,
+        method: 'GET',
+        path,
+        device_id: device,
+        public_key: publicKey,
+        payload_sha256: await digest(ticket),
+      },
+      true,
+    )) as unknown as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+/** Capabilities an endpoint advertises; unknown names are ignored. */
+export function features(request: Request): Set<string> {
+  return new Set(
+    (request.headers.get('X-Relay-Features') ?? '')
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => /^[a-z0-9-]{1,32}$/.test(f))
+      .slice(0, 16),
+  );
 }

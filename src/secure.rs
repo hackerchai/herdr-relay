@@ -213,7 +213,9 @@ pub async fn connect<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     .await
     .map_err(|_| Error::new("TLS_TIMEOUT", "device TLS handshake exceeded 10 seconds"))?
     .map_err(tls_io)?;
+    crate::timing::mark("tls");
     crate::control::bind(&mut stream, context).await?;
+    crate::timing::mark("bind");
     Ok(stream)
 }
 
@@ -234,8 +236,111 @@ pub async fn accept<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     .await
     .map_err(|_| Error::new("TLS_TIMEOUT", "device TLS handshake exceeded 10 seconds"))?
     .map_err(tls_io)?;
+    crate::timing::mark("tls");
     crate::control::bind(&mut stream, context).await?;
+    crate::timing::mark("bind");
     Ok(stream)
+}
+
+/// Direct LAN entry: accept only a client whose certificate a current grant
+/// pins. TLS 1.3 encrypts the client certificate, so no device identity is
+/// visible on the local network. Returns the authenticated certificate.
+pub(crate) async fn accept_granted<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    stream: S,
+    identity: &Identity,
+    granted: &[CertificateDer<'static>],
+) -> Result<(tokio_rustls::server::TlsStream<S>, CertificateDer<'static>)> {
+    let pins = granted
+        .iter()
+        .map(PinnedVerifier::new)
+        .collect::<Result<Vec<_>>>()?;
+    if pins.is_empty() {
+        return Err(Error::new(
+            "NOT_AUTHORIZED",
+            "no device may access this host",
+        ));
+    }
+    let mut config =
+        ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(tls_error)?
+            .with_client_cert_verifier(Arc::new(GrantedVerifier { pins }))
+            .with_single_cert(
+                vec![identity.certificate.clone()],
+                identity.private_key.clone_key(),
+            )
+            .map_err(tls_error)?;
+    config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    config.send_tls13_tickets = 0;
+    config.max_early_data_size = 0;
+    config.max_fragment_size = Some(16 * 1024);
+    config.alpn_protocols = vec![b"herdr-relay/1".to_vec()];
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio_rustls::TlsAcceptor::from(Arc::new(config))
+            .accept_with(stream, |c| c.set_buffer_limit(Some(64 * 1024))),
+    )
+    .await
+    .map_err(|_| Error::new("TLS_TIMEOUT", "device TLS handshake exceeded 10 seconds"))?
+    .map_err(tls_io)?;
+    crate::timing::mark("tls");
+    let certificate = stream
+        .get_ref()
+        .1
+        .peer_certificates()
+        .and_then(|certs| certs.first())
+        .ok_or_else(|| Error::new("TLS_AUTH_FAILED", "client certificate required"))?
+        .clone()
+        .into_owned();
+    Ok((stream, certificate))
+}
+
+/// Accepts a client certificate pinned by any one current grant.
+#[derive(Debug)]
+struct GrantedVerifier {
+    pins: Vec<PinnedVerifier>,
+}
+impl ClientCertVerifier for GrantedVerifier {
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
+    }
+    fn verify_client_cert(
+        &self,
+        cert: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> std::result::Result<ClientCertVerified, rustls::Error> {
+        self.pins
+            .iter()
+            .find_map(|pin| pin.verify_client_cert(cert, intermediates, now).ok())
+            .ok_or(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
+            ))
+    }
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &CertificateDer<'_>,
+        _: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+        Err(rustls::Error::General("TLS 1.3 is required".into()))
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            signature,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
+    }
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![SignatureScheme::ED25519]
+    }
 }
 
 fn check_context(

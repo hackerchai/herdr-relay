@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Keep this deployment on Workers Free; never purchase or change a plan."""
+"""Report the deployment's Workers plan before deploying; never purchase or change a plan.
+
+The maintainer selected Workers Paid (USD 5 base). Spending beyond the base is
+bounded by the relay's global quotas in wrangler.production.jsonc. Plan names
+are reported, not matched, so a provider renaming cannot strand a release
+after its crate is published. An unreadable billing API still stops deployment.
+"""
 import json
 import os
-import sys
 import urllib.request
 
 account = os.environ['CLOUDFLARE_ACCOUNT_ID']
@@ -17,13 +22,16 @@ if not data.get('success') or not isinstance(data.get('result'), list):
     raise SystemExit('Cannot confirm the Workers billing plan; deployment stopped.')
 if data.get('result_info', {}).get('total_pages', 1) > 1:
     raise SystemExit('Unexpected subscription pagination; deployment stopped.')
-paid = [
+
+
+def name(item):
+    plan = item.get('rate_plan', {})
+    return (plan.get('id', '') + ' ' + plan.get('public_name', '')).lower()
+
+
+relevant = [
     item for item in data['result']
-    if any(word in (item.get('rate_plan', {}).get('id', '') + ' ' + item.get('rate_plan', {}).get('public_name', '')).lower()
-           for word in ('workers', 'durable object'))
+    if any(word in name(item) for word in ('workers', 'durable object'))
     and item.get('state', '').lower() != 'cancelled'
 ]
-if paid:
-    print('A Workers/DO subscription is present. The USD 10 policy requires a new billing review.', file=sys.stderr)
-    raise SystemExit(1)
-print('Workers paid subscription absent: retain Free plan and provider-enforced free quotas.')
+print('Workers plan:', ', '.join(name(item).strip() for item in relevant) or 'Free')

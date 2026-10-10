@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptFrame, initialFlow, quotas } from '../src/limits.ts';
+import { acceptFrame, channelLimits, initialFlow, quotas } from '../src/limits.ts';
 
 test('persisted flow rejects forged credit, overflow and control floods without resetting progress', () => {
-  const limits = quotas({}).stream;
+  const limits = channelLimits(quotas({}).stream, false);
   let a = initialFlow(0, limits),
     b = initialFlow(0, limits);
   const data = { kind: 1, offset: 0n, payload: new Uint8Array(16384) };
@@ -75,13 +75,13 @@ test('persisted flow rejects forged credit, overflow and control floods without 
     attach: 1,
     short: 4,
     pending: 4,
-    stream: { bytes_per_second: 16384 },
+    stream: { bytes_per_second: 16384, window: 262144 },
   });
   for (const env of [
-    { MAX_DEVICE_ATTACH: '9' },
-    { MAX_PENDING_CHANNELS: '5' },
+    { MAX_DEVICE_ATTACH: '65' },
+    { MAX_PENDING_CHANNELS: '33' },
     { MAX_DEVICE_SHORT: '0' },
-    { CHANNEL_BYTES_PER_SECOND: '262145' },
+    { CHANNEL_BYTES_PER_SECOND: '4194305' },
     { MAX_DEVICE_ATTACH: '01' },
   ])
     assert.throws(() => quotas(env), /RELAY_UNCONFIGURED/);
