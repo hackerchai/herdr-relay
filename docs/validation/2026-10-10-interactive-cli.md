@@ -20,7 +20,7 @@ all interactive commands use their default profile without a `--profile` flag.
 ## Manual workflow
 
 - `serve` discovered default and named Herdr sessions on both platforms.
-  Selected two new Mac sessions and one Ubuntu session; install/start succeeded.
+  Selected two new sessions on each platform; install/start succeeded.
 - New one-use links were pasted with bracketed paste into `pair` in both
   directions. Hostnames appeared without raw protocol identifiers.
 - Native Herdr attached in both directions. Commands containing Chinese text
@@ -47,7 +47,9 @@ resolution/generation checks and actual dial failures.
 
 ## Release verification
 
-The new release, real GitHub self-update, and matching production Worker
-publication are verified separately after the release pipeline completes.
+The release, real anonymous GitHub self-update, and production Worker publication
+passed. See the [v0.2.1 release record](2026-10-10-release-0.2.1.md) for exact CI
+links, checksums, service upgrade cases, duplicate hosts and post-update native
+connections.
 macOS user-login startup is validated through its LaunchAgent definition and
 service-manager lifecycle; the user's live desktop is not logged out or rebooted.

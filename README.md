@@ -26,7 +26,7 @@ session; it does not start the server. The default public Relay needs no
 Cloudflare account. See the [installation guide](docs/install.md) for services
 and [self-hosting guide](docs/self-hosting.md) for your own Cloudflare deployment.
 
-The [release record](docs/validation/2026-10-10-release-0.1.1.md) identifies the
+The [release record](docs/validation/2026-10-10-release-0.2.1.md) identifies the
 four-platform assets, production deployment and actual acceptance coverage.
 
 For the bounded native server, use the [Herdr 0.9.3 compatibility patch](patches/herdr/README.md).

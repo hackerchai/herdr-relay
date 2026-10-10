@@ -1,6 +1,6 @@
 # Herdr Relay 决策索引
 
-更新日期：2026-10-10。ADR-0001–0009 记录产品方向；ADR-0010/0011 的通道、TLS 与配对已进入候选实现并完成受控跨平台验证；ADR-0012 取代 ADR-0005/0010 的同实例并发部分。当前实现覆盖见[候选记录](../validation/2026-10-10-candidates.md)，未完成项见[发布门槛](../release-readiness.md)；决定已接受不等于完整产品验收已完成。
+Current release: v0.2.1, published 2026-10-10. Implementation, CI, public distribution, service upgrades and actual runtime coverage are recorded in the [release acceptance](../validation/2026-10-10-release-0.2.1.md). Earlier candidate records remain historical evidence.
 
 | 决策 | 内容 | 来源 |
 |---|---|---|

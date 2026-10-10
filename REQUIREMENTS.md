@@ -1,6 +1,6 @@
 # Herdr Relay 需求澄清
 
-更新日期：2026-10-10。状态：首版核心产品范围已确认，采用单实例独占连接；CLI、Cloudflare Relay 和四平台候选包已有实现与受控验证。完整兼容性、全链路资源和公开发布验收仍未完成，见[候选记录](docs/validation/2026-10-10-candidates.md)与[发布门槛](docs/release-readiness.md)。
+Current release: v0.2.1, published 2026-10-10. Implementation, CI, public distribution, service upgrades and actual runtime coverage are recorded in the [release acceptance](docs/validation/2026-10-10-release-0.2.1.md). Earlier candidate records remain historical evidence.
 
 ## 来源与判断规则
 

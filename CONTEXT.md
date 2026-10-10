@@ -1,6 +1,6 @@
 # Herdr Relay 领域术语
 
-状态：已同步 2026-10-10 单实例独占修正与候选实现；四平台候选已有受控验证，完整发布验收仍未完成。实际覆盖见[候选记录](docs/validation/2026-10-10-candidates.md)。
+Current release: v0.2.1, published 2026-10-10. Implementation, CI, public distribution, service upgrades and actual runtime coverage are recorded in the [release acceptance](docs/validation/2026-10-10-release-0.2.1.md). Earlier candidate records remain historical evidence.
 
 需求和未决事项见 [REQUIREMENTS.md](REQUIREMENTS.md)。这些定义用于避免混淆，不承诺尚未确认的数量、数据结构或协议字段。
 
