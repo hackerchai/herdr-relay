@@ -89,9 +89,20 @@ impl Challenge {
     pub fn sign(self, identity: &Identity, now: u64) -> Result<Proof> {
         let bytes = self.canonical()?;
         let expiration: u64 = self.expires_at.parse().map_err(|_| invalid())?;
-        if self.device_id != identity.id || expiration <= now || expiration > now.saturating_add(60)
-        {
+        if self.device_id != identity.id {
             return Err(invalid());
+        }
+        // The Relay enforces its original 60-second nonce lifetime. Endpoint
+        // clocks may differ slightly; signing must never extend that lifetime
+        // or turn an ordinary clock offset into an identity failure.
+        const CLOCK_SKEW_SECONDS: u64 = 300;
+        if expiration.saturating_add(CLOCK_SKEW_SECONDS) <= now
+            || expiration > now.saturating_add(60 + CLOCK_SKEW_SECONDS)
+        {
+            return Err(Error::new(
+                "CLOCK_SKEW",
+                "local clock differs from the relay; enable automatic time synchronization",
+            ));
         }
         let provider = rustls::crypto::ring::default_provider();
         let key = provider

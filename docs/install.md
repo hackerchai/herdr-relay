@@ -93,8 +93,11 @@ This is a login-session LaunchAgent, not a system daemon. Without the opt-in,
 start it explicitly after login. Closing Terminal does not stop a started job;
 logging out ends that user's GUI job. Automatic operation before GUI login is
 not provided. Stopping an opted-in job stops this session; reinstall without the
-flag to remove the next-login start setting. A fatal daemon exit requires another
-`service start`; ordinary transient network failures reconnect within the daemon.
+flag to remove the next-login start setting. Opted-in jobs use launchd KeepAlive
+with a 30-second launch throttle; explicit `service stop` unloads the job and
+prevents respawning in that session. Jobs without autostart require a manual
+start after a fatal exit. Ordinary temporary network and Relay quota failures
+reconnect within the daemon without losing pairing or shared-session settings.
 
 Repeated start does not replace a healthy process. Stop and uninstall are
 idempotent and affect only this profile's job. Status distinguishes a loaded job
@@ -110,8 +113,9 @@ The same `service install/start/stop/status/uninstall` commands use
 `~/.config/systemd/user`, with private files and a profile-specific unit name.
 No system-wide unit or privileged account is created. `--start-at-login` enables
 the user unit under `default.target`; without it, start the unit explicitly.
-The unit restarts failed processes with a five-second delay and a bounded start
-rate. Explicit stop does not remove enablement for a future user-manager start.
+The unit restarts failed processes after 30 seconds without a permanent
+start-limit lockout. Explicit stop suppresses restart but does not remove
+enablement for a future user-manager start.
 
 `service status` reports `loginctl`'s current Linger setting when available.
 With lingering disabled, the service's lifetime depends on login/session policy;

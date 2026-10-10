@@ -603,6 +603,11 @@ async fn response_json<T: DeserializeOwned>(mut response: reqwest::Response) -> 
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(network)? {
         if body.len() + chunk.len() > 8192 {
+            if !success {
+                let mut error = http_error(status);
+                error.retry_after = retry_after;
+                return Err(error);
+            }
             return Err(protocol());
         }
         body.extend_from_slice(&chunk);
@@ -616,7 +621,7 @@ async fn response_json<T: DeserializeOwned>(mut response: reqwest::Response) -> 
             .map(|v| v.code)
             .unwrap_or_default();
         let mut error = remote_error(&code);
-        if code.is_empty() {
+        if error.code == "RELAY_ERROR" {
             error = http_error(status);
         }
         error.retry_after = retry_after;
@@ -753,6 +758,7 @@ fn remote_error(code: &str) -> Error {
 }
 fn http_error(status: u16) -> Error {
     match status {
+        408 => disconnected(),
         429 => remote_error("RATE_LIMITED"),
         500..=599 => remote_error("RELAY_BUSY"),
         _ => remote_error("RELAY_ERROR"),
@@ -771,6 +777,7 @@ fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> Error {
             .as_ref()
             .and_then(|body| serde_json::from_slice::<serde_json::Value>(body).ok())
             .and_then(|value| value["code"].as_str().map(remote_error))
+            .filter(|error| error.code != "RELAY_ERROR")
             .unwrap_or_else(|| http_error(response.status().as_u16()));
         error.retry_after = response
             .headers()

@@ -33,6 +33,23 @@ npm run check
 npm test
 ```
 
+## Sleep protection
+
+On both platforms, start an isolated foreground server and a managed service.
+Confirm the PID owns the expected locks (`pmset -g assertions` on macOS,
+`systemd-inhibit --list` on Linux) and compare them with `service status`.
+Keep the Relay origin unreachable during one run: power protection must remain
+active while the network reconnects. Stop normally, then repeat with SIGKILL;
+verify the old PID's locks disappear and a managed restart acquires new ones.
+Remove the isolated job after testing.
+
+On Linux, verify permission denial is reported without stopping the server, then
+restore permission and observe recovery without restarting Relay. Test logind
+restart only on an isolated machine. On a MacBook, verify the UI reports lid-close
+sleep as OS controlled. A physical lid-close/resume check must use the intended
+power/display setup; do not infer it from an IOKit assertion or a VM test.
+See [sleep protection](sleep-protection.md) for platform limits and headless setup.
+
 ## Pair, publish and connect
 
 Choose the candidate origin and absolute CLI/Herdr paths; replace the example
@@ -119,7 +136,7 @@ Do not log out an active user session merely to test it without authorization.
 
 Lower one quota at a time in an isolated Worker. Test new identities, slow
 unsigned bodies, pending and active channel pools, per-device limits and global
-publisher/time budgets. Confirm the exact error and Retry-After, unaffected
+publisher concurrency and data-channel time budgets. Confirm the exact error and Retry-After, unaffected
 existing connections and recovered capacity after release/expiry. Reconstruct
 objects/configuration without resetting their stored counters. With admission
 off, inspect signed operator status and verify active routes close. Restore the

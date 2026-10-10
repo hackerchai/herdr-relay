@@ -85,3 +85,49 @@ test('leases retain global capacity and prepaid daily time across restarts, midn
   ledger.release('publisher', 'boot-1');
   assert.equal(ledger.renew('publisher', 'boot-2').code, undefined);
 });
+
+test('bounded publishers stay online across days without spending the data-channel budget', () => {
+  const db = database(),
+    env = {
+      GLOBAL_PUBLISHERS: '2',
+      GLOBAL_CHANNEL_SECONDS_PER_DAY: '120',
+      GLOBAL_PUBLISHER_SECONDS_PER_DAY: '86400',
+    };
+  let now = 0,
+    ledger = new AdmissionLedger(db, env, () => now);
+  assert.equal(ledger.hold('publisher', 'host-a', 'boot-a', 120000).code, undefined);
+  assert.equal(ledger.hold('publisher', 'host-b', 'boot-b', 120000).code, undefined);
+  assert.equal(ledger.hold('publisher', 'extra', 'extra', 120000).code, 'GLOBAL_QUOTA_EXCEEDED');
+  // Preserve existing production settings and SQLite across a rolling upgrade.
+  // Two hosts must survive past the old combined 24-hour daily cutoff.
+  for (let minute = 1; minute <= 3 * 24 * 60; minute++) {
+    now = minute * 60000;
+    if (minute % 1440 === 0) ledger = new AdmissionLedger(db, env, () => now);
+    assert.equal(ledger.renew('host-a', 'boot-a').code, undefined, `host-a at ${minute}`);
+    assert.equal(ledger.renew('host-b', 'boot-b').code, undefined, `host-b at ${minute}`);
+  }
+  assert.equal(ledger.hold('channel', 'data-a', 'client', 120000).code, undefined);
+  assert.equal(ledger.hold('channel', 'data-b', 'other', 120000).code, 'GLOBAL_QUOTA_EXCEEDED');
+  assert.equal(ledger.renew('host-a', 'boot-a').code, undefined);
+  ledger.release('host-a', 'wrong-boot');
+  assert.equal(ledger.hold('publisher', 'extra', 'extra', 120000).code, 'GLOBAL_QUOTA_EXCEEDED');
+  now += 600001;
+  assert.equal(ledger.renew('host-a', 'boot-a').code, 'CHANNEL_EXPIRED');
+  assert.equal(ledger.hold('publisher', 'extra', 'extra', 120000).code, undefined);
+});
+
+test('publisher leases tolerate missed maintenance while retaining a finite ownership deadline', () => {
+  let now = 0;
+  const ledger = new AdmissionLedger(database(), { GLOBAL_PUBLISHERS: '1' }, () => now);
+  assert.equal(ledger.hold('publisher', 'host', 'old', 600000).expires, 600000);
+  now = 540000;
+  assert.equal(ledger.renew('host', 'old').expires, 1140000);
+  assert.equal(ledger.hold('publisher', 'host', 'new', 600000).code, undefined);
+  ledger.release('host', 'old');
+  assert.equal(ledger.renew('host', 'old').code, 'CHANNEL_EXPIRED');
+  assert.equal(ledger.renew('host', 'new').code, undefined);
+  assert.throws(() => ledger.hold('channel', 'data', 'client', 600000));
+  assert.throws(() => ledger.hold('publisher', 'host', 'new', 600001));
+  now = 1140000;
+  assert.equal(ledger.renew('host', 'new').code, 'CHANNEL_EXPIRED');
+});

@@ -98,14 +98,14 @@ pub async fn serve(profile: &Path, origin: &str, config: &Path) -> Result<()> {
             let hint = if rows.is_empty() {
                 "No running Herdr sessions. Run herdr in another terminal, detach, then press r.\nRelay only shares sessions you explicitly select."
             } else {
-                "Space selects sessions. Enter applies the entire selection. Unchecked sessions stop sharing."
+                "Space selects; Enter applies. Unchecked sessions stop sharing."
             };
             screen.render(
                 &format!("Share sessions on {}", names::hostname()),
                 &rows,
                 selected,
                 &format!(
-                    "{hint}\nStart at login: {} (a toggles)",
+                    "{hint}\nStart at login: {} (a toggles)\nSleep protection: automatic while serving (? for lid-close limits)",
                     if autostart { "on" } else { "off" }
                 ),
                 "Space Select    Enter Apply    a Autostart    r Refresh    ? Help    Esc Exit",
@@ -119,7 +119,7 @@ pub async fn serve(profile: &Path, origin: &str, config: &Path) -> Result<()> {
                     KeyCode::Char('a') => autostart = !autostart,
                     KeyCode::Char('r') => break false,
                     KeyCode::Enter if !sessions.is_empty() => break true,
-                    KeyCode::Char('?') | KeyCode::F(1) => screen.help("Only selected sessions are shared. Existing paired clients can access all shared sessions.\nAutostart: macOS launchd / Linux systemd, at user login.\nLinux boot/after-logout mode: herdr-relay service autostart boot.\nNo Herdr session is created or stopped by this menu.").await?,
+                    KeyCode::Char('?') | KeyCode::F(1) => screen.help("Only selected sessions are shared; Herdr processes are never started or stopped.\nAutostart runs at login. Linux boot mode: service autostart boot.\nSleep protection starts with the server; MacBook lid close remains OS controlled.\nAfter setup choose Sleep protection status, or run herdr-relay serve --help.").await?,
                     _ => {},
                 }
             }
@@ -197,16 +197,21 @@ async fn invitation_screen(screen: &mut Screen, profile: &Path) -> Result<Option
             "Copy pairing link".into(),
             "Print link and finish".into(),
             "Generate a fresh link".into(),
+            "Sleep protection status".into(),
             "Done".into(),
         ];
         loop {
-            match screen.choose("Sharing is running", &rows, "On the other computer run herdr-relay pair and paste the link.\nLinks expire after 10 minutes and grant one-way access to all shared sessions.", false).await? {
+            match screen.choose("Sharing is running", &rows, "On the other computer: herdr-relay pair, then paste the link.\nOne-use link, valid for 10 minutes, for all shared sessions.\nSleep protection status shows inhibitors and lid-close limits.", false).await? {
                 Choice::Pick(0) => match copy_link(&link).await {
                     Ok(()) => screen.message("Copied", "Paste into herdr-relay pair on the client. The link expires in 10 minutes.").await?,
                     Err(_) => screen.message("Clipboard unavailable", "Choose Print link and finish, then copy the link from your terminal.").await?,
                 },
                 Choice::Pick(1) => return Ok(Some(link)),
                 Choice::Pick(2) | Choice::Refresh => break,
+                Choice::Pick(3) => {
+                    let power = crate::service::power_summary(profile).await;
+                    screen.message("Sleep protection", &format!("{power}\n\nMacBook closed-display use needs power, an external display and input devices.\nA VM cannot keep its physical host awake.\nStop the service to release locks. Details: herdr-relay serve --help.")).await?;
+                },
                 Choice::Pick(_) | Choice::Back => return Ok(None),
                 Choice::Rename(_) => {},
             }

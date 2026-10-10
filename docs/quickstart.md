@@ -33,6 +33,10 @@ Relay creates its default profile and installs/starts its background service.
 Use the Copy action to copy the pairing link, or print it and copy it manually.
 Closing this screen keeps sharing active.
 
+Sleep protection is enabled while the server runs. Check `herdr-relay service
+status` or **Sleep protection status** in the sharing menu. MacBook lid-close sleep
+remains OS controlled; see [sleep protection and closed-lid setup](sleep-protection.md).
+
 Login startup is enabled for a new server; press `a` during setup to toggle it.
 Rerunning `serve` preserves existing selections and lets you change them. An
 unchecked session stops being shared but its Herdr process continues running.

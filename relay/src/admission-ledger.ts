@@ -10,8 +10,7 @@ export type AdmissionEnv = Partial<
     | 'GLOBAL_PUBLISHERS'
     | 'GLOBAL_CHANNELS'
     | 'GLOBAL_PENDING_CHANNELS'
-    | 'GLOBAL_CHANNEL_SECONDS_PER_DAY'
-    | 'GLOBAL_PUBLISHER_SECONDS_PER_DAY',
+    | 'GLOBAL_CHANNEL_SECONDS_PER_DAY',
     string
   >
 >;
@@ -34,7 +33,6 @@ export function globalQuotas(env: AdmissionEnv) {
     channel: value('GLOBAL_CHANNELS', 32),
     pending: value('GLOBAL_PENDING_CHANNELS', 64),
     channel_ms: value('GLOBAL_CHANNEL_SECONDS_PER_DAY', 345600) * 1000,
-    publisher_ms: value('GLOBAL_PUBLISHER_SECONDS_PER_DAY', 1382400) * 1000,
   };
 }
 export interface LedgerStorage {
@@ -49,6 +47,7 @@ export interface LedgerStorage {
 export type Decision = { code?: string; retry_after?: number; id?: string; expires?: number };
 type Lease = { id: string; owner: string; kind: string; expires: number; pending: number };
 export type LeaseKind = 'challenge' | 'publisher' | 'channel';
+export const PUBLISHER_LEASE_MS = 600000;
 const DAY = 86400000;
 export class AdmissionLedger {
   private db: LedgerStorage;
@@ -150,7 +149,7 @@ export class AdmissionLedger {
       !['challenge', 'publisher', 'channel'].includes(kind) ||
       !Number.isInteger(duration) ||
       duration < 1 ||
-      duration > 120000 ||
+      duration > (kind === 'publisher' ? PUBLISHER_LEASE_MS : 120000) ||
       id.length > 160 ||
       owner.length > 64
     )
@@ -177,15 +176,15 @@ export class AdmissionLedger {
       const expires = Math.max(old?.expires ?? 0, now + duration);
       const charges: { day: number; ms: number }[] = [];
       if (kind === 'publisher' || kind === 'channel') {
-        // Prepay only the newly allocated interval, split at UTC midnight.
-        // Never refund early release: repeated reconnects cannot create free
-        // service time. A failed reservation charges neither day's balance.
+        // Account for newly allocated time across UTC midnight. Publisher
+        // presence is bounded by concurrent leases, never a daily uptime cap.
+        // Data channels still prepay time without refunds for early release.
         const key = (kind + '_ms') as 'publisher_ms' | 'channel_ms';
         for (let start = Math.max(now, old?.expires ?? 0); start < expires;) {
           const day = Math.floor(start / DAY),
             end = Math.min(expires, (day + 1) * DAY),
             ms = end - start;
-          if (this.count(key, day) + ms > this.limits[key])
+          if (kind === 'channel' && this.count(key, day) + ms > this.limits.channel_ms)
             return reject(Math.ceil(((day + 1) * DAY - now) / 1000));
           charges.push({ day, ms });
           start = end;
@@ -215,7 +214,12 @@ export class AdmissionLedger {
       .toArray()[0];
     if (!row || !['publisher', 'channel'].includes(row.kind))
       return { code: 'CHANNEL_EXPIRED', retry_after: 120 };
-    return this.hold(row.kind as LeaseKind, id, owner, 120000);
+    return this.hold(
+      row.kind as LeaseKind,
+      id,
+      owner,
+      row.kind === 'publisher' ? PUBLISHER_LEASE_MS : 120000,
+    );
   }
   authenticated(id: string, owner: string): void {
     this.db.sql.exec('UPDATE admission_leases SET pending=0 WHERE id=? AND owner=?', id, owner);

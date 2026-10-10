@@ -19,7 +19,6 @@ fn recovery_is_bounded_jittered_and_never_waits_to_take_over_another_client() {
     for code in [
         "TARGET_BUSY",
         "QUOTA_EXCEEDED",
-        "GLOBAL_QUOTA_EXCEEDED",
         "NOT_AUTHORIZED",
         "TLS_AUTH_FAILED",
         "IDENTITY_CHANGED",
@@ -38,6 +37,25 @@ fn recovery_is_bounded_jittered_and_never_waits_to_take_over_another_client() {
     let mut limited = Error::new("RATE_LIMITED", "slow down");
     limited.retry_after = Some(Duration::from_secs(90));
     assert!(backoff.next(&limited, 0).unwrap() >= Duration::from_secs(90));
+}
+
+#[test]
+fn exhausted_relay_capacity_waits_for_recovery_without_a_retry_storm() {
+    let mut backoff = Backoff::default();
+    let mut exhausted = Error::new("GLOBAL_QUOTA_EXCEEDED", "capacity exhausted");
+    exhausted.retry_after = Some(Duration::from_secs(7 * 3600));
+    for _ in 0..100 {
+        let delay = backoff.next(&exhausted, 500).expect("quota is temporary");
+        assert!(delay > Duration::from_secs(7 * 3600));
+        assert!(delay <= Duration::from_secs(7 * 3600 + 30));
+    }
+    exhausted.retry_after = None;
+    assert!(backoff.next(&exhausted, 0).unwrap() >= Duration::from_secs(60));
+    backoff.reset();
+    assert_eq!(
+        backoff.next(&Error::new("NETWORK_LOST", "offline"), 0),
+        Some(Duration::from_millis(500))
+    );
 }
 
 #[test]

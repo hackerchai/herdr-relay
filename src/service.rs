@@ -19,6 +19,7 @@ use tokio::net::{UnixListener, UnixStream};
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Status,
+    PowerStatus,
     Invite,
     ReloadTargets,
     ReloadAuthorization,
@@ -33,6 +34,9 @@ enum Request {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 enum Response {
+    PowerStatus {
+        status: crate::power::Status,
+    },
     Status {
         origin: String,
         relay_online: bool,
@@ -110,6 +114,7 @@ pub async fn run(profile: &Path, origin: &str, remote: Option<crate::relay::Rela
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(io)?;
     let mut hangup =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).map_err(io)?;
+    let power = crate::power::Guard::start();
     let mut tasks = tokio::task::JoinSet::new();
     let mut publisher = tokio::task::JoinSet::new();
     let mut synchronization = tokio::task::JoinSet::new();
@@ -146,8 +151,9 @@ pub async fn run(profile: &Path, origin: &str, remote: Option<crate::relay::Rela
                 let (profile, origin, boot) = (profile.to_owned(), origin.to_owned(), boot.clone());
                 let remote = remote.clone();
                 let registry = registry.clone();
+                let power = power.status();
                 tasks.spawn(async move {
-                    let result = tokio::time::timeout(std::time::Duration::from_secs(30), handle(stream, &profile, &origin, &boot, remote.as_ref(), &registry)).await;
+                    let result = tokio::time::timeout(std::time::Duration::from_secs(30), handle(stream, &profile, &origin, &boot, remote.as_ref(), &registry, power)).await;
                     if let Ok(Err(error)) = result { eprintln!("Service request failed: {}", error.code); }
                 });
             }
@@ -167,6 +173,7 @@ pub async fn run(profile: &Path, origin: &str, remote: Option<crate::relay::Rela
     tasks.shutdown().await;
     synchronization.shutdown().await;
     publisher.shutdown().await;
+    power.stop().await;
     drop(listener);
     drop(cleanup);
     drop(lock);
@@ -180,9 +187,13 @@ async fn handle(
     boot: &str,
     remote: Option<&crate::relay::Relay>,
     registry: &crate::targets::Registry,
+    power: crate::power::Status,
 ) -> Result<()> {
     let store = Store::open(profile, origin)?;
     match control::receive(&mut stream).await? {
+        Request::PowerStatus => {
+            control::send(&mut stream, &Response::PowerStatus { status: power }).await
+        }
         Request::Status => {
             control::send(
                 &mut stream,
@@ -292,6 +303,33 @@ pub async fn status(profile: &Path) -> Result<(String, bool, u32)> {
     })
     .await
     .map_err(|_| Error::new("SERVICE_IO", "service status timed out"))?
+}
+
+/// Kept separate from the original status response so old and new CLI/service
+/// binaries can still perform lifecycle operations during an upgrade.
+pub async fn power_status(profile: &Path) -> Result<crate::power::Status> {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut stream = connect(&profile.join("daemon.sock")).await?;
+        control::send(&mut stream, &Request::PowerStatus).await?;
+        match control::receive(&mut stream).await? {
+            Response::PowerStatus { status } => Ok(status),
+            _ => Err(Error::new(
+                "SERVICE_IO",
+                "unexpected sleep protection response",
+            )),
+        }
+    })
+    .await
+    .map_err(|_| Error::new("SERVICE_IO", "sleep protection status timed out"))?
+}
+
+pub async fn power_summary(profile: &Path) -> String {
+    match power_status(profile).await {
+        Ok(status) => status.to_string(),
+        Err(_) => {
+            "Sleep protection: unknown. Update/restart the service to report its inhibitors.".into()
+        }
+    }
 }
 
 pub async fn reload_authorization(profile: &Path) -> Result<()> {

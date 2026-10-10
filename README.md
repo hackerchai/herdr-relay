@@ -57,6 +57,7 @@ Choose a shared session by name, then connect to its agent workspace.
 - [First connection: English](docs/quickstart.md) · [中文教程](docs/quickstart.zh-CN.md)
 - [Installation and background services](docs/install.md)
 - [Updates and autostart](docs/quickstart.md#background-service-and-upgrades)
+- [Sleep protection and MacBook lid-close limits](docs/sleep-protection.md)
 - [Host your own Relay](docs/self-hosting.md)
 - [Relay development](relay/README.md) · [Protocol](protocol/README.md)
 

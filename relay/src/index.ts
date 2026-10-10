@@ -154,8 +154,12 @@ export default {
       let device: string;
       try {
         device = await env.AUTH.getByName('device:' + proof.challenge.device_id).consume(proof);
-      } catch {
-        throw new ProtocolError('ACCESS_INVALID', 401);
+      } catch (error) {
+        // RPC preserves the error message, not custom Error properties.
+        // Storage/network failures must not masquerade as invalid credentials.
+        if (error instanceof Error && ['ACCESS_INVALID', 'ACCESS_REPLAYED'].includes(error.message))
+          throw new ProtocolError('ACCESS_INVALID', 401);
+        throw new ProtocolError('RELAY_BUSY', 503, 5);
       }
       if (destination.operation === 'operator') {
         if (!env.OPERATOR_DEVICE_IDS?.split(',').includes(device))

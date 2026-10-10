@@ -15,8 +15,16 @@ import { acceptFrame, initialFlow, quotas, type Flow, type Limits } from './limi
 import { restoredChannelValid } from './recovery.ts';
 import type { Env } from './index.ts';
 import { ADMISSION_OBJECT, admitted } from './admission.ts';
+import { PUBLISHER_LEASE_MS } from './admission-ledger.ts';
 
-type Control = { kind: 'control'; device: string; boot: string; ready: boolean; expires: number };
+type Control = {
+  kind: 'control';
+  device: string;
+  boot: string;
+  ready: boolean;
+  expires: number;
+  renewAt?: number;
+};
 type Pair = {
   kind: 'pair';
   purpose: 'pair' | 'control' | 'attach';
@@ -243,7 +251,7 @@ export class DeviceRelay extends DurableObject<Env> {
         'publisher',
         'publisher:' + device,
         boot,
-        120000,
+        PUBLISHER_LEASE_MS,
       ),
     );
     // A fresh proof from this publisher replaces a half-open older control
@@ -261,6 +269,7 @@ export class DeviceRelay extends DurableObject<Env> {
       boot,
       ready: false,
       expires: lease.expires!,
+      renewAt: lease.expires! - PUBLISHER_LEASE_MS / 2,
     } satisfies Control);
     server.send(JSON.stringify({ type: 'online', boot_id: boot }));
     await this.arm();
@@ -834,7 +843,9 @@ export class DeviceRelay extends DurableObject<Env> {
           s.kind === 'control' &&
           (typeof s.ready !== 'boolean' ||
             !Number.isSafeInteger(s.expires) ||
-            s.expires <= Date.now())
+            s.expires <= Date.now() ||
+            (s.renewAt !== undefined &&
+              (!Number.isSafeInteger(s.renewAt) || s.renewAt > s.expires)))
         )
           throw Error();
         attached.set(ws, s);
@@ -895,10 +906,14 @@ export class DeviceRelay extends DurableObject<Env> {
           .toArray(),
       );
     const active =
-      !!control ||
       this.ctx.storage.sql.exec("SELECT id FROM channels WHERE purpose='attach' LIMIT 1").toArray()
         .length > 0;
-    if (control) deadlines.push({ expires: (control.deserializeAttachment() as Control).expires });
+    if (control) {
+      const host = control.deserializeAttachment() as Control;
+      deadlines.push({
+        expires: Math.min(host.expires, host.renewAt ?? host.expires - PUBLISHER_LEASE_MS / 2),
+      });
+    }
     for (const ws of this.ctx.getWebSockets()) {
       const s = ws.deserializeAttachment() as Attachment;
       if (s?.kind !== 'pair' || !s.flow) continue;
@@ -934,7 +949,7 @@ export class DeviceRelay extends DurableObject<Env> {
     await this.expire();
     const control = this.control(),
       host = control?.deserializeAttachment() as Control | undefined;
-    if (control && host) {
+    if (control && host && (host.renewAt ?? host.expires - PUBLISHER_LEASE_MS / 2) <= Date.now()) {
       try {
         const lease = admitted(
           await this.env.ADMISSION.getByName(ADMISSION_OBJECT).renew(
@@ -946,9 +961,31 @@ export class DeviceRelay extends DurableObject<Env> {
           control.serializeAttachment({
             ...(control.deserializeAttachment() as Control),
             expires: lease.expires!,
+            renewAt: lease.expires! - PUBLISHER_LEASE_MS / 2,
           });
-      } catch {
-        if (this.control() === control) this.endControl(control, host.boot);
+      } catch (error) {
+        if (this.control() === control) {
+          if (
+            host.expires <= Date.now() ||
+            (error instanceof ProtocolError &&
+              !['RELAY_BUSY', 'GLOBAL_QUOTA_EXCEEDED', 'RATE_LIMITED'].includes(error.code))
+          )
+            this.endControl(control, host.boot);
+          else
+            control.serializeAttachment({
+              ...(control.deserializeAttachment() as Control),
+              // Only the existing authority is retained. A failed RPC cannot
+              // invent capacity or extend the lease, even across hibernation.
+              renewAt: Math.min(
+                host.expires,
+                Date.now() +
+                  Math.max(
+                    30000,
+                    error instanceof ProtocolError ? (error.retryAfter ?? 0) * 1000 : 0,
+                  ),
+              ),
+            });
+        }
       }
     }
     const rows = this.ctx.storage.sql

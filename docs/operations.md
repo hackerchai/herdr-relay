@@ -31,31 +31,49 @@ engineering defaults; string vars can lower each value to a positive integer.
 | GLOBAL_CHANNELS | 32 | All attach, pairing and short control channels combined |
 | GLOBAL_PENDING_CHANNELS | 64 | Channels not yet confirmed authenticated by the publisher |
 | GLOBAL_CHANNEL_SECONDS_PER_DAY | 345600 | Prepaid channel time, all channels combined |
-| GLOBAL_PUBLISHER_SECONDS_PER_DAY | 1382400 | Prepaid publisher time, all publishers combined |
 
 The per-device, per-target, rate and credit-window constraints still apply.
 Creating new identities cannot enlarge any global pool. An IP bucket is only a
 short rate gate: users behind a NAT share it, so widespread `RATE_LIMITED` must
 be investigated before lowering it. No registration, payment or common bearer
-secret is introduced. `429` and `503` include `Retry-After`; the CLI treats global
-quota exhaustion as terminal for the current operation and prints an actionable
-message. Release spare connections or retry after the indicated interval.
+secret is introduced. Host presence has no daily uptime allowance or maximum
+connection age: a healthy host renews its bounded concurrency slot indefinitely.
+`GLOBAL_PUBLISHER_SECONDS_PER_DAY` is retired and ignored, including in older
+self-host configurations. The `publisher_ms` counter remains observational.
+
+`429` and `503` include `Retry-After`. Publishers and reconnecting clients wait
+through temporary global quota exhaustion, with jitter after the server's
+cooldown to avoid synchronized retries. Without a cooldown, global quota and
+rate-limit failures wait at least 60 seconds. Local service commands remain
+responsive during the wait. Invalid authorization, changed identity and TLS
+authentication failures remain terminal; retries never bypass these checks.
+Challenge signing tolerates up to five minutes of endpoint clock skew without
+changing the Relay's nonce expiry. A larger offset reports `CLOCK_SKEW` and
+retries no faster than once per minute; enable automatic time synchronization.
 
 Request leases last 15 seconds; body reads expire after 10 seconds with `408
 REQUEST_TIMEOUT`. Challenges expire after 60 seconds, pending channels after 30.
-Publishers and active attach channels have at most 120-second leases renewed by
+Publishers have ten-minute leases, normally renewed every five minutes. A
+transient renewal failure retries after 30 seconds (or a longer server cooldown)
+while retaining only the already granted lease. The retry schedule survives
+hibernation. A missing/expired lease still closes the connection and the daemon
+reconnects automatically. Active attach channels retain 120-second leases and
 30-second maintenance alarms. Exact owner/reservation matching makes delayed
 release harmless. A missing/expired global lease fails closed, including after
 upgrade from a version without the global coordinator.
 
-Service time is **prepaid**, not a measurement of observed CPU or billed duration.
+Data-channel service time is **prepaid**, not a measurement of observed CPU or billed duration.
 Each lease extension charges only the newly reserved interval, split across UTC
 midnight. Early release does not refund it; rapid reconnects cannot obtain free
 service time. Reservations spanning two days debit neither day if either quota
 would be exceeded. This intentionally conservative cap may reject idle clients.
 It bounds admitted service time, alongside the per-direction byte/message rates;
 it is not an exact egress allowance or dollar spending limit. Counters persist
-through hibernation, process restart and configuration updates.
+through hibernation, process restart and configuration updates. Reaching the
+channel budget can interrupt an attach, but does not evict the host publisher.
+Requests and data channels still obey application and provider quotas. Workers
+Free exhaustion, endpoint sleep and provider outages can interrupt access; this
+design provides automatic recovery, not a zero-downtime guarantee.
 
 ## Inspect and alert
 
@@ -91,9 +109,10 @@ external notification is installed by the code:
 Use Cloudflare account Analytics/GraphQL for actual Worker requests/CPU/errors,
 DO active time and GB-seconds, WebSocket counts, SQL rows read/written and storage.
 Compare these to the prepaid/application counters; they measure different things.
-Version 3 adds one global renewal RPC per publisher/active channel roughly
-every 30 seconds, plus entry/challenge operations and expiry alarms. Measure the
-current deployment; older cost samples do not represent these additional calls.
+Idle publishers use one global renewal RPC every five minutes; active channels
+renew roughly every 30 seconds. WebSocket protocol ping/pong frames do not wake
+hibernating objects. Entry/challenge operations and expiry alarms add work.
+Measure the current deployment; application uptime counters are not billing data.
 
 Configure Cloudflare budget/usage notifications with the account's supported
 notification features after #19 specifies recipients and thresholds. Budget
@@ -112,7 +131,7 @@ logs requires reviewing its field capture and retention separately.
 | --- | --- |
 | Hashed IP minute buckets | Current and previous minute, then SQL/alarm cleanup |
 | Global aggregate counters | Current and two preceding UTC days; no identities |
-| Global leases | 15–120 seconds after last allocation, exact-owner release or expiry |
+| Global leases | Requests 15 seconds; channels at most 120 seconds; publishers at most ten minutes, with exact-owner release or expiry |
 | Access nonces | 60 seconds maximum, consumed atomically once |
 | Channel tickets and reservations | Pending 30 seconds; active until release/lease expiry |
 | Late-release tombstones | 120 seconds |

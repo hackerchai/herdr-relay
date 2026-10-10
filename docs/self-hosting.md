@@ -136,7 +136,8 @@ Every target still permits one active attach. No configuration increases the
 64 KiB credit window, frame bound or 30-second stalled-progress timeout.
 `ADMISSION_ENABLED=false` rejects new work with `RELAY_BUSY` and stops publisher
 and channel lease renewal. Existing connections close on their next event or
-maintenance alarm (normally within 30 seconds; forwarding also checks expiry).
+maintenance alarm (normally within 30 seconds for active channels and five
+minutes for idle publishers; forwarding also checks expiry).
 Signed operator status remains available subject to entry quotas. This switch
 alone is not a hard account-wide spending cap. See [operations](operations.md)
 for global quotas, finite metadata retention, monitoring and emergency shutdown.
@@ -150,8 +151,9 @@ for global quotas, finite metadata retention, monitoring and emergency shutdown.
 | NOT_AUTHORIZED | Pair again or ask the publisher to inspect the directional grant. |
 | TARGET_BUSY | Wait for the current client to detach; no preemption. |
 | QUOTA_EXCEEDED | Release this device's unused channels or adjust within bounds. |
-| GLOBAL_QUOTA_EXCEEDED | The entire Relay has exhausted capacity or prepaid service time. Respect Retry-After, release unused work, or use a separate self-hosted deployment. |
+| GLOBAL_QUOTA_EXCEEDED | Global capacity, requests or data-channel time is exhausted. Publishers and reconnecting clients wait automatically using Retry-After plus jitter. Host presence has no daily uptime cutoff. |
 | RATE_LIMITED / RELAY_BUSY | Respect Retry-After and the CLI backoff. |
+| CLOCK_SKEW | Enable automatic time synchronization. Small offsets are tolerated; larger offsets retry without changing the Relay's nonce expiry. |
 | INTERNAL_ERROR | Inspect sanitized Worker error metadata and binding/migration health. |
 
 Do not log payload bodies, proof/ticket headers, pairing invitations or terminal

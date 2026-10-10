@@ -132,8 +132,8 @@ enum Action {
         #[command(subcommand)]
         action: ServiceAction,
     },
-    /// Select Herdr sessions to share and start the background service.
-    #[command(display_order = 10)]
+    /// Select Herdr sessions to share and start the background service with sleep protection.
+    #[command(display_order = 10, after_help = herdr_relay::power::HELP)]
     Serve {
         #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,

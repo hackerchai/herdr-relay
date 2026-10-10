@@ -8,6 +8,7 @@ pub mod interactive;
 pub mod names;
 pub mod native;
 pub mod pairing;
+pub mod power;
 pub mod relay;
 pub mod retry;
 pub mod secure;

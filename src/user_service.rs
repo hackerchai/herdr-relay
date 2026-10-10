@@ -246,9 +246,9 @@ fn definition(paths: &Paths, profile: &Path, origin: &str, login: bool) -> Resul
         }
     }
     Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>{}</string><key>ProgramArguments</key><array>{arguments}</array><key>EnvironmentVariables</key><dict>{environment}</dict><key>RunAtLoad</key><{}/><key>Umask</key><integer>63</integer><key>ExitTimeOut</key><integer>15</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n",
-        paths.label,
-        if login { "true" } else { "false" }
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>{1}</string><key>ProgramArguments</key><array>{arguments}</array><key>EnvironmentVariables</key><dict>{environment}</dict><key>RunAtLoad</key><{0}/><key>KeepAlive</key><{0}/><key>ThrottleInterval</key><integer>30</integer><key>Umask</key><integer>63</integer><key>ExitTimeOut</key><integer>15</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n",
+        if login { "true" } else { "false" },
+        paths.label
     ))
 }
 fn systemd_quote(value: &str) -> Result<String> {
@@ -299,7 +299,7 @@ fn linux_definition(paths: &Paths, profile: &Path, origin: &str) -> Result<Strin
     // ':' disables ExecStart environment substitution. Percent specifiers are
     // escaped independently; no command is evaluated by a shell.
     Ok(format!(
-        "[Unit]\nDescription=Herdr Relay user service\nStartLimitIntervalSec=60\nStartLimitBurst=3\n\n[Service]\nType=exec\nExecStart=:{arguments}\n{environment}UMask=0077\nRestart=on-failure\nRestartSec=5s\nTimeoutStopSec=15s\nStandardOutput=null\nStandardError=journal\n\n[Install]\nWantedBy=default.target\n"
+        "[Unit]\nDescription=Herdr Relay user service\nStartLimitIntervalSec=0\n\n[Service]\nType=exec\nExecStart=:{arguments}\n{environment}UMask=0077\nRestart=on-failure\nRestartSec=30s\nTimeoutStopSec=15s\nStandardOutput=null\nStandardError=journal\n\n[Install]\nWantedBy=default.target\n"
     ))
 }
 async fn launch(args: &[&str]) -> Result<std::process::Output> {
@@ -494,11 +494,20 @@ pub async fn set_autostart(profile: &Path, enabled: bool) -> Result<()> {
             "<key>RunAtLoad</key><true/>",
             "<key>RunAtLoad</key><false/>",
         );
+        let contents = contents.replace(
+            "<key>KeepAlive</key><true/>",
+            "<key>KeepAlive</key><false/>",
+        );
         let contents = if enabled {
-            contents.replace(
-                "<key>RunAtLoad</key><false/>",
-                "<key>RunAtLoad</key><true/>",
-            )
+            contents
+                .replace(
+                    "<key>RunAtLoad</key><false/>",
+                    "<key>RunAtLoad</key><true/>",
+                )
+                .replace(
+                    "<key>KeepAlive</key><false/>",
+                    "<key>KeepAlive</key><true/>",
+                )
         } else {
             contents
         };
@@ -764,10 +773,13 @@ pub async fn status(profile: &Path) -> Result<()> {
         return Ok(());
     }
     match crate::service::status(profile).await {
-        Ok((origin, online, pid)) if job_pid(&paths).await? == Some(pid) => service_notice!(
-            "Running ({origin}); Relay {}.",
-            if online { "online" } else { "connecting" }
-        ),
+        Ok((origin, online, pid)) if job_pid(&paths).await? == Some(pid) => {
+            service_notice!(
+                "Running ({origin}); Relay {}.",
+                if online { "online" } else { "connecting" }
+            );
+            service_notice!("{}", crate::service::power_summary(profile).await);
+        }
         _ => service_notice!(
             "Loaded, but daemon is not responding. Stop it and run foreground serve for diagnosis."
         ),
@@ -922,6 +934,29 @@ pub async fn upgrade(profile: &Path, bytes: &[u8], force_restart: bool) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unattended_service_definitions_recover_without_a_permanent_restart_lockout() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            directory: root.path().to_owned(),
+            binary: root.path().join("herdr-relay"),
+            config: root.path().join("config.json"),
+            definition: root.path().join("service-definition"),
+            label: "test".into(),
+        };
+        let linux = linux_definition(&paths, root.path(), "https://relay.example").unwrap();
+        assert!(linux.lines().any(|line| line == "StartLimitIntervalSec=0"));
+        assert!(linux.lines().any(|line| line == "RestartSec=30s"));
+        assert!(linux.lines().any(|line| line == "Restart=on-failure"));
+        if cfg!(target_os = "macos") {
+            let mac = definition(&paths, root.path(), "https://relay.example", true).unwrap();
+            assert!(mac.contains("<key>KeepAlive</key><true/>"));
+            assert!(mac.contains("<key>ThrottleInterval</key><integer>30</integer>"));
+            let manual = definition(&paths, root.path(), "https://relay.example", false).unwrap();
+            assert!(manual.contains("<key>RunAtLoad</key><false/>"));
+            assert!(manual.contains("<key>KeepAlive</key><false/>"));
+        }
+    }
     #[test]
     fn service_activation_rolls_back_both_files_and_discards_failed_candidate() {
         let root = tempfile::tempdir().unwrap();

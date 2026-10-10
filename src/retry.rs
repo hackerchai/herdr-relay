@@ -25,6 +25,8 @@ impl Backoff {
                 | "CONTROL_TIMEOUT"
                 | "RELAY_BUSY"
                 | "RATE_LIMITED"
+                | "GLOBAL_QUOTA_EXCEEDED"
+                | "CLOCK_SKEW"
                 | "INTERNAL_ERROR"
                 | "TICKET_INVALID"
                 | "CHANNEL_EXPIRED"
@@ -34,7 +36,19 @@ impl Backoff {
         let ceiling = (1000u64 << self.failures.min(5)).min(30_000);
         self.failures = self.failures.saturating_add(1);
         let delay = Duration::from_millis(ceiling / 2 + jitter % (ceiling / 2 + 1));
-        Some(delay.max(error.retry_after.unwrap_or_default()))
+        // Server cooldowns are a floor, not a shared wake-up instant for every
+        // host. Keep jitter after Retry-After to avoid a midnight retry herd.
+        let floor = error.retry_after.unwrap_or_else(|| {
+            if matches!(
+                error.code,
+                "GLOBAL_QUOTA_EXCEEDED" | "RATE_LIMITED" | "CLOCK_SKEW"
+            ) {
+                Duration::from_secs(60)
+            } else {
+                Duration::ZERO
+            }
+        });
+        Some(floor.saturating_add(delay))
     }
 }
 
