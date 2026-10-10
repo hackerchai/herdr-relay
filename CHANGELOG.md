@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/hackerchai/herdr-relay/compare/v0.1.2...v0.2.0) (2026-10-10)
+
+
+### Features
+
+* simplify sharing and connections with interactive host menus ([9ef3297](https://github.com/hackerchai/herdr-relay/commit/9ef32975ba0018308589688346eeac34548a8d2b))
+
+
+### Bug Fixes
+
+* update an older service when the CLI is already current ([761bb0a](https://github.com/hackerchai/herdr-relay/commit/761bb0ad0c5a6dfc5958cdb9781952b2f4ba097b))
+
 ## [0.1.2](https://github.com/hackerchai/herdr-relay/compare/v0.1.1...v0.1.2) (2026-10-10)
 
 
