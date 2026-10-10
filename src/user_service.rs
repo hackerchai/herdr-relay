@@ -454,6 +454,25 @@ pub fn configuration(profile: &Path) -> Result<Option<Config>> {
         .map_err(|_| Error::new("SERVICE_CONFIG", "invalid installed service configuration"))
 }
 
+/// A package-manager CLI upgrade does not replace the separately installed daemon.
+pub async fn needs_upgrade(profile: &Path, version: &str) -> Result<bool> {
+    if configuration(profile)?.is_none() {
+        return Ok(false);
+    }
+    let paths = Paths::new(profile)?;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new(&paths.binary)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    Ok(!matches!(result, Ok(Ok(output)) if output.status.success()
+        && String::from_utf8_lossy(&output.stdout).trim() == format!("herdr-relay {version}")))
+}
+
 pub async fn set_autostart(profile: &Path, enabled: bool) -> Result<()> {
     let _lock = mutation_lock(profile)?;
     let mut config = configuration(profile)?.ok_or_else(|| {
