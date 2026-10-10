@@ -74,7 +74,7 @@ MIT license. Source packages are available from https://crates.io/crates/herdr-r
 GitHub's automatic source archives contain only this distribution repository's documentation.
 ''')
     if not existing:
-        # The tag points at the PUBLIC repository's documentation, never private history.
+        # The tag points at the distribution repository's documentation, not source history.
         gh('release', 'create', tag, '--draft', '--title', f'Herdr Relay {version}',
            '--notes-file', str(notes), '--target', 'main')
     else:

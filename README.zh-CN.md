@@ -61,4 +61,4 @@ herdr-relay pair
 ## 许可证
 
 [MIT](LICENSE)。二进制发行版和 [crate](https://crates.io/crates/herdr-relay) 公开发布；
-开发仓库为私有仓库。
+源代码仓库同样公开。

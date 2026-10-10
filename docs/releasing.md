@@ -16,7 +16,7 @@ Merging a version PR creates a `vX.Y.Z` release and invokes `Publish` in the sam
 workflow. Publication validates the tag, main ancestry and synchronized versions,
 reruns checks on that exact commit, and builds native packages for macOS arm64,
 macOS x86_64, Linux arm64 musl and Linux x86_64 musl. Each also builds the pinned
-bounded Herdr server. Checksums and source manifests accompany the private GitHub
+bounded Herdr server. Checksums and source manifests accompany the source repository's GitHub
 assets. The CLI source is published publicly to crates.io under MIT; Worker
 source and the upstream patch/build materials are explicitly included.
 
@@ -43,13 +43,12 @@ Repository Secrets:
 
 The Cloudflare token has no billing-write permission. It is scoped to the existing
 account and `hackerchai.com` zone; the Global API Key is not placed in CI.
-Keep the source repository private; the separate binary repository is public.
-Publication uses repository Secrets and adds
-no manual approval step. GitHub rejected branch protection for this private
-repository on its current plan (403: GitHub Pro required). `CI Required` reports
-all checks, and Publish enforces their success, but GitHub cannot enforce the
-ordinary PR merge gate on this plan. Do not change visibility or buy a plan
-automatically.
+The source repository and separate binary repository are public, as confirmed by
+the maintainer on 2026-10-11. Publication uses repository Secrets and adds no
+manual approval step. `CI Required` reports all checks, and Publish enforces
+their success. The main branch currently has no branch protection configured;
+the earlier private-repository plan restriction no longer describes its visibility.
+Do not change repository visibility or buy a plan automatically.
 
 ## Recovery
 
@@ -73,8 +72,8 @@ readiness manifest and invokes `scripts/publish-public-release.py`. It selects
 only the four CLI archives named by that manifest and their validated checksums,
 plus LICENSE. It uploads into a draft release, uploads the manifest last, then
 publishes the draft. The tag belongs to the public documentation repository.
-Private source archives, accompanying Herdr builds, development history and CI
-logs stay outside the public binary repository. Completed public releases are
+Source archives, accompanying Herdr builds, development history and CI logs stay
+in the source repository rather than the binary repository. Completed public releases are
 not overwritten by retries. A failed draft can be retried with the same tag.
 
 `RELEASES_GITHUB_TOKEN` must belong to a publisher with Contents: write on the

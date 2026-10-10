@@ -64,4 +64,4 @@ Choose a shared session by name, then connect to its agent workspace.
 ## License
 
 [MIT](LICENSE). Binary releases and the [crate](https://crates.io/crates/herdr-relay)
-are public; the development repository is private.
+are public, along with this source repository.

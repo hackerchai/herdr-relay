@@ -154,7 +154,7 @@ jobs:
           pattern: binaries-*
           path: target/packages
           merge-multiple: true
-      - name: Verify artifacts and publish private GitHub assets
+      - name: Verify artifacts and publish source-repository GitHub assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
@@ -184,7 +184,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASES_GITHUB_TOKEN }}
         run: python3 scripts/publish-public-release.py
-      - name: Publish private update readiness manifest
+      - name: Publish source-repository update readiness manifest
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}

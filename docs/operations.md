@@ -1,7 +1,7 @@
 # Controlled Relay operations
 
 Production uses `herdr-relay.hackerchai.com` in the maintainer's Cloudflare account.
-The project uses a private repository, MIT/public crate distribution, a USD 10
+The project uses a public source repository, MIT/public crate distribution, a USD 10
 monthly ceiling and best-effort user-service scope. Production overrides are in
 `relay/wrangler.production.jsonc`; the table
 below gives general self-host defaults.

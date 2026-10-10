@@ -4,7 +4,7 @@ This runs the same Worker, device proof, pinned end-to-end TLS and native Herdr
 protocol as the production hosted endpoint. A Cloudflare account belongs to the
 operator; connecting devices need no Cloudflare account or deployment credential.
 Worker source and these instructions are included in the public crate source
-archive. The GitHub repository remains private. The hosted deployment retains
+archive and the public GitHub repository. The hosted deployment retains
 Workers Free to stay under its USD 10 budget; free-tier exhaustion fails requests.
 Paid self-hosters must set their own cost policy; application quotas are not a
 provider spending cap.

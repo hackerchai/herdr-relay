@@ -1,7 +1,7 @@
 # Release readiness
 
-Updated 2026-10-10. The maintainer accepted GUI testing, chose MIT licensing,
-kept the source repository private and authorized public crates.io publishing.
+Updated 2026-10-11. The maintainer accepted GUI testing, chose MIT licensing,
+confirmed the source repository is public and authorized crates.io publishing.
 A separate [public binary repository](https://github.com/hackerchai/herdr-relay-releases)
 now provides anonymous updates. The production
 hostname is `herdr-relay.hackerchai.com`; the monthly project ceiling is USD 10.
@@ -13,7 +13,7 @@ hostname is `herdr-relay.hackerchai.com`; the monthly project ceiling is USD 10.
 | Four release platforms | Tagged native builds and executable checks passed | [0.2.1 binary assets](https://github.com/hackerchai/herdr-relay-releases/releases/tag/v0.2.1); interactive checks used macOS arm64 and OrbStack Ubuntu arm64, with Rosetta checks on macOS Intel binaries |
 | Upstream reliable-control queue | Patch implemented; 32 transport tests pass | [Patch and build instructions](../patches/herdr/README.md); custom server required for this bound |
 | Rust/TypeScript and upstream checks | Release CI passed on Linux/macOS | [Successful release run](https://github.com/hackerchai/herdr-relay/actions/runs/38040201479); 50 Rust tests per OS, 7 TypeScript tests, 32 upstream regressions and 3 publication tests |
-| License and publication | MIT; private source repository, public binaries and crate | Crate explicitly includes Worker source and patch materials |
+| License and publication | MIT; public source repository, binaries and crate | Crate explicitly includes Worker source and patch materials |
 | Production Worker | 0.2.1 deployed; real CLI/service upgrade and native reconnect passed | [Successful release run](https://github.com/hackerchai/herdr-relay/actions/runs/38040201479); detailed production checks are kept locally |
 | Budget | Retain Workers Free, below USD 10 | Provider rejects paid-only CPU setting with error 100328; CI rejects a paid Workers/DO subscription |
 | Retention | Existing defaults retained | 25-hour offline mirrors; [other TTLs](operations.md); no application payload logs |
@@ -30,7 +30,6 @@ This file records actual state; workflow source existing is not evidence that a
 release ran successfully. The old `0.1.0-dev` artifacts and their checksums remain
 historical candidates and are not relabelled as the new release.
 
-GitHub rejected private-repository branch protection on the current Free plan.
-`CI Required` reports all checks and publication enforces them; ordinary PR
-merges cannot be made subject to a server-enforced required check on this plan.
-The source repository remains private. See [release operation](releasing.md).
+The now-public source repository currently has no main-branch protection
+configured. `CI Required` reports all checks and publication enforces them.
+See [release operation](releasing.md).
