@@ -14,8 +14,9 @@ and release manifest together. Because GitHub suppresses ordinary events created
 with `GITHUB_TOKEN`, the release workflow explicitly dispatches CI on the bot PR
 branch. The same checks therefore also run on release PRs.
 
-Merging a version PR creates a `vX.Y.Z` release and invokes `Publish` in the same
-workflow. Publication validates the tag, main ancestry and synchronized versions,
+Merging a version PR creates a `vX.Y.Z` tag and a draft release, then invokes
+`Publish` in the same workflow. Tag creation is explicit so drafts can be checked
+out before publication. Publication validates the tag, main ancestry and synchronized versions,
 reruns checks on that exact commit, and builds native packages for macOS arm64,
 macOS x86_64, Linux arm64 musl and Linux x86_64 musl. Each also builds the pinned
 bounded Herdr server. Checksums and source manifests accompany the source repository's GitHub
@@ -30,8 +31,13 @@ The cache prefix was changed after this was observed during the first release.
 After artifact construction succeeds, the workflow verifies the account remains
 on Workers Free and deploys the matching Worker through pinned Wrangler. A TLS
 and protocol probe checks the production hostname. Every stage must pass;
-an incomplete run is not a successful release. Retry with the `Publish` workflow's
-existing `tag` input. An existing crate is accepted only if its checksum exactly
+an incomplete run is not a successful release. All source-release archives and
+the readiness manifest are uploaded before the draft is published and GitHub
+locks its assets. Retry with the `Publish` workflow's existing `tag` input. If the
+source release is already published, the retry downloads and verifies its
+original assets instead of replacing them. A release accidentally locked before
+the readiness manifest was uploaded requires a new patch version.
+An existing crate is accepted only if its checksum exactly
 matches; immutable registry versions with different contents require a new release.
 
 Repository Secrets:

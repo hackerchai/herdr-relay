@@ -52,7 +52,8 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$TAG^{commit}")"
           git merge-base --is-ancestor HEAD origin/main
-          gh release view "$TAG" --json isDraft --jq '.isDraft == false' | grep -qx true
+          # Drafts keep assets writable until every publication gate has passed.
+          gh release view "$TAG" --json tagName --jq .tagName | grep -Fxq "$TAG"
           python3 - <<'PY'
           import json, os, tomllib
           version = os.environ['TAG'][1:]
@@ -154,14 +155,27 @@ jobs:
           pattern: binaries-*
           path: target/packages
           merge-multiple: true
-      - name: Verify artifacts and publish source-repository GitHub assets
+      - name: Prepare source-repository release assets
+        id: source_release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
-          (cd target/packages && sha256sum -c ./*.sha256)
-          python3 scripts/package-source.py
-          gh release upload "$TAG" target/packages/*.tar.gz target/packages/*.sha256 --clobber
+          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          if [ "$draft" = true ]; then
+            (cd target/packages && sha256sum -c ./*.sha256)
+            python3 scripts/package-source.py
+            gh release upload "$TAG" target/packages/*.tar.gz target/packages/*.sha256 --clobber
+          else
+            # A retry after publication must reuse the locked original bytes.
+            # A release locked before its readiness manifest needs a new version.
+            gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq herdr-relay-update.json
+            gh release download "$TAG" --pattern '*.tar.gz' --pattern '*.sha256' \
+              --pattern herdr-relay-update.json --dir target/packages --clobber
+            (cd target/packages && sha256sum -c ./*.sha256)
+            cp target/packages/herdr-relay-update.json "$RUNNER_TEMP/source-update.json"
+          fi
       - name: Publish CLI to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -180,13 +194,19 @@ jobs:
         run: python3 scripts/check-relay.py https://herdr-relay.hackerchai.com
       - name: Prepare update readiness manifest after all release gates pass
         run: python3 scripts/update-manifest.py
+      - name: Finalize source-repository release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          DRAFT: ${{ steps.source_release.outputs.draft }}
+        run: |
+          if [ "$DRAFT" = true ]; then
+            gh release upload "$TAG" target/packages/herdr-relay-update.json --clobber
+            gh release edit "$TAG" --draft=false --latest
+          else
+            cmp "$RUNNER_TEMP/source-update.json" target/packages/herdr-relay-update.json
+          fi
       - name: Publish the public binary channel
         env:
           GH_TOKEN: ${{ secrets.RELEASES_GITHUB_TOKEN }}
         run: python3 scripts/publish-public-release.py
-      - name: Publish source-repository update readiness manifest
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
-        run: |
-          gh release upload "$TAG" target/packages/herdr-relay-update.json --clobber
