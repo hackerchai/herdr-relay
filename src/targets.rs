@@ -104,6 +104,42 @@ impl Store {
     pub fn list(&self) -> Result<Vec<Definition>> {
         Ok(self.read()?.targets)
     }
+    /// Commit an interactive selection once, without losing concurrent edits.
+    pub fn apply_selection(
+        &self,
+        expected: &[Definition],
+        selected: &[(String, Locator)],
+    ) -> Result<()> {
+        self.transaction(|state| {
+            if state.targets != expected {
+                return Err(Error::new("SHARES_CHANGED", "sharing changed in another process; refresh and apply again"));
+            }
+            for target in &mut state.targets { target.enabled = false; }
+            let mut selected_paths = Vec::new();
+            for (name, locator) in selected {
+                valid_name(name)?;
+                let path = locator.socket_path();
+                if selected_paths.contains(&path) {
+                    return Err(Error::new("TARGET_EXISTS", "select each Herdr session only once"));
+                }
+                selected_paths.push(path.clone());
+                if let Some(target) = state.targets.iter_mut().find(|t| t.locator.socket_path() == path) {
+                    target.enabled = true;
+                } else {
+                    let locator = locator.clone().normalized()?;
+                    let native = locator.resolve()?;
+                    if state.targets.iter().any(|t| t.name == *name || t.locator.resolve().is_ok_and(|n| n.same_instance(&native))) {
+                        return Err(Error::new("TARGET_EXISTS", "this name or Herdr instance is already configured"));
+                    }
+                    if state.targets.len() >= 8 {
+                        return Err(Error::new("QUOTA_EXCEEDED", "at most eight sessions can be configured; remove an unused share first"));
+                    }
+                    state.targets.push(Definition { id: random_id()?, name: name.clone(), locator, enabled: true });
+                }
+            }
+            Ok(())
+        })
+    }
     pub fn add(&self, name: String, locator: Locator) -> Result<Definition> {
         valid_name(&name)?;
         let locator = locator.normalized()?;

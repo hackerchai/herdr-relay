@@ -68,3 +68,12 @@ flowchart LR
 - 同一已配置 session 的进程重启可自动恢复原共享；设备授权与共享配置持久存在，运行实例和客户端通道按新生命周期建立。
 - “用户”描述使用者；首版没有与之必然一一对应的云端账号实体。主机本地管理授权设备；通过云端设备准入不等于获得主机访问授权。
 - 首版产品是可用 CLI 与 Cloudflare Relay；“插件”仅指后续集成，不应据此为首版引入插件安装和终端启动包装。
+
+## Interactive presentation terminology
+
+- **Host name**: the human-readable hostname carried with a pairing invitation. It is a display label, not a device identity or an authorization key.
+- **Host alias**: a locally saved, unique display name for a paired host. Changing it does not change the peer identity, trust scope, or grant.
+- **Pairing link**: a copyable representation of a one-time pairing invitation and its host name. The link token preserves the existing invitation semantics; it does not replace the saved device grant.
+- **Server autostart**: automatic activation of the Relay user service under the selected login or Linux linger policy. It does not create a Herdr session.
+
+The preferred user workflow and its lifecycle boundaries are recorded in [ADR-0014](docs/adr/0014-interactive-cli-and-server-lifecycle.md).

@@ -282,11 +282,10 @@ where
                 let result =
                     crate::transport::bridge_native(&mut stream, native, Duration::from_secs(4))
                         .await;
-                if matches!(result, Ok(crate::transport::NativeEnd::Server)) {
-                    target
-                        .available
-                        .store(false, std::sync::atomic::Ordering::Relaxed);
-                }
+                // Herdr may close just this native socket when its client
+                // detaches. EOF does not establish that the shared server is
+                // offline. Socket generation checks and failed future dials
+                // determine server availability instead.
                 drop(reservation);
                 result.map(|_| ())
             }

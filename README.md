@@ -37,6 +37,56 @@ Requirements are in [REQUIREMENTS.md](REQUIREMENTS.md), decisions are in
 [docs/adr](docs/adr/README.md), and implementation work is tracked in
 [GitHub Issues](https://github.com/hackerchai/herdr-relay/issues).
 
+## Quick start
+
+On the host, start Herdr normally, then detach with Ctrl-B followed by Q:
+
+```sh
+herdr
+herdr-relay serve
+```
+
+Select the sessions to share with Space and press Enter. Relay initializes its
+state, installs/starts the background service, and offers a pairing link to copy.
+New servers start at login by default; press `a` in setup to change this setting.
+
+On the client:
+
+```sh
+herdr-relay pair
+```
+
+Paste the complete link. Choose the hostname and Herdr session in the terminal
+menu. On later visits, just run:
+
+```sh
+herdr-relay
+```
+
+This is equivalent to `herdr-relay connect`. No profile, device ID, or target ID
+is needed. Duplicate hostnames receive distinct local aliases; press `a` in the
+host menu to rename one. Press `?` or F1 for help, `/` to search, `r` to refresh,
+and Esc to return. Detaching from Herdr returns to the session menu.
+
+```sh
+herdr-relay service status
+herdr-relay service stop
+herdr-relay service start
+herdr-relay service autostart off
+herdr-relay update
+```
+
+On Linux, `service autostart boot` enables user lingering for startup before login
+and continued operation after logout, subject to the system's authorization
+policy. macOS autostart runs at user login. Neither mode starts Herdr itself.
+
+`update` checks complete stable GitHub Releases, verifies the selected archive,
+and updates the CLI and installed server. Private releases require your own
+GitHub access (`gh auth login` or `GH_TOKEN`). Users without repository access can
+upgrade from the public crate with `cargo install herdr-relay --locked --force`.
+Active sessions defer the server restart; `update --restart-service` explicitly
+allows disconnecting them. See the [simple walkthrough](docs/quickstart.md).
+
 ## Development
 
 Building the CLI requires Rust/Cargo 1.99 or newer. Native release archives need
@@ -63,7 +113,7 @@ and record the outcome.
 
 See [installation and service commands](docs/install.md). Local archives
 include checksums and need no Rust or Node at runtime. `service install/start/stop/status/uninstall` manages a private,
-profile-specific macOS LaunchAgent or systemd user unit; start-at-login is explicit.
+profile-specific macOS LaunchAgent or systemd user unit. Interactive server setup enables login startup by default; explicit service install retains its opt-in flag.
 
 ## Local native-client bridge
 
@@ -112,7 +162,7 @@ local socket pair and does not grant access to either device. See the
 With two initialized profiles, start the publisher in a separate terminal:
 
 ```sh
-target/debug/herdr-relay --profile /absolute/profile-a serve \
+target/debug/herdr-relay --profile /absolute/profile-a serve --foreground \
   --origin https://local-pair.invalid
 ```
 

@@ -227,3 +227,9 @@ Q3 已确认 Herdr 薄插件推迟到后续版本，首版不验收插件菜单�
 - DESIGN.md 引用的 `../work/` 研究不在本次提供的两个文件内，尚未作为补充证据读取。
 - RESEARCH.md 中的 `attach` 与 DESIGN.md 中的 `host` 是历史候选命令名；实际 CLI 使用 `serve --relay` 与 `connect`，以当前 `--help` 和 README 为准。
 - DESIGN.md 保留设计演进依据；当前已有 Rust/TS 实现、受控部署和候选包，不能再用最初探针状态描述整个项目。
+
+## Interactive CLI requirements — 2026-10-10
+
+The maintainer requested a hostname-first workflow: `serve` discovers and multi-selects local Herdr sessions, initializes state, and installs/starts the service; `pair` consumes one pasted link; bare `herdr-relay` and `connect` open the same host/session browser. Everyday operation requires no device or target IDs. TUI help and the existing service administration commands remain available. macOS and Linux support server autostart; GitHub Releases supply `update`. See [ADR-0014](docs/adr/0014-interactive-cli-and-server-lifecycle.md) and issues #33–#39.
+
+All new tickets, PRs, plans, and ADRs are written in English. Required validation remains focused unit tests and manual overall acceptance; no end-to-end test suite is added. Cloudflare protocol breaking changes are permitted for this release, but must be deployed and verified together with the matching client.

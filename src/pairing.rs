@@ -139,6 +139,36 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn saved_origin(profile: &Path) -> Result<Option<String>> {
+        if !profile.exists() {
+            return Ok(None);
+        }
+        private_directory(profile, false)?;
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(profile.join("pairing.json"))
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(storage(e)),
+        };
+        private_file(&file)?;
+        let mut bytes = Vec::new();
+        file.take((STATE_LIMIT + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(storage)?;
+        if bytes.len() > STATE_LIMIT {
+            return Err(Error::new(
+                "PAIR_STORAGE",
+                "pairing state exceeds size limit",
+            ));
+        }
+        let state: State = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::new("PAIR_STORAGE", "pairing state is corrupt"))?;
+        Self::open(profile, &state.origin)?;
+        Ok(Some(state.origin))
+    }
     /// Explicit trust-scope reset. Neither identity nor shared targets move.
     pub fn switch_origin(profile: &Path, from: &str, to: &str) -> Result<()> {
         validate_origin(from)?;

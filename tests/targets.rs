@@ -135,3 +135,52 @@ async fn registry_tracks_only_saved_enabled_runtime_generations() {
         "restart cannot re-enable an explicitly disabled target"
     );
 }
+
+#[test]
+fn interactive_selection_is_atomic_and_rejects_stale_edits() {
+    let root = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let profile = root.path().join("profile");
+    Identity::initialize(&profile).unwrap();
+    let store = Store::open(&profile).unwrap();
+    let path = root.path().join("one.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let locator = Locator::Socket { path: path.clone() };
+    store
+        .apply_selection(&[], &[("One".into(), locator.clone())])
+        .unwrap();
+    let original = store.list().unwrap();
+    let absent = Locator::Socket {
+        path: root.path().join("missing.sock"),
+    };
+    assert!(
+        store
+            .apply_selection(&original, &[("Missing".into(), absent)])
+            .is_err()
+    );
+    assert_eq!(
+        store.list().unwrap(),
+        original,
+        "a failed batch cannot disable an existing share"
+    );
+    store.set_enabled(&original[0].id, false).unwrap();
+    assert_eq!(
+        store.apply_selection(&original, &[]).unwrap_err().code,
+        "SHARES_CHANGED"
+    );
+    drop(listener);
+    std::fs::remove_file(path).unwrap();
+    let current = store.list().unwrap();
+    store
+        .apply_selection(&current, &[("One".into(), current[0].locator.clone())])
+        .unwrap();
+    let restored = store.list().unwrap();
+    assert_eq!(restored[0].id, original[0].id);
+    assert!(
+        restored[0].enabled,
+        "saved offline sessions remain selectable"
+    );
+}
