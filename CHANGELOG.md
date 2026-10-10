@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/hackerchai/herdr-relay/compare/v0.1.0...v0.1.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **build:** install Herdr targets for its pinned Rust toolchain ([dc9dfc7](https://github.com/hackerchai/herdr-relay/commit/dc9dfc756dbda7302632f82ce82ce0663770a034))
+
 ## 0.1.0 (2026-10-10)
 
 
