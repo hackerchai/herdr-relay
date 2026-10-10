@@ -50,10 +50,10 @@ Herdr 使用[官方安装器](https://herdr.dev/docs/install/)。目前验证的
 orb -m herdr-relay-demo
 ```
 
-在 Ubuntu 中启动一个名为 `work` 的 Herdr 会话：
+在 Ubuntu 中直接启动 Herdr，使用默认会话：
 
 ```sh
-herdr --session work
+herdr
 ```
 
 完成 Herdr 首次设置后，按 **Ctrl+B，松开，再按 Q** 返回 Ubuntu shell。Herdr 会话继续运行。
@@ -62,13 +62,13 @@ herdr --session work
 
 ```sh
 herdr-relay identity init
-herdr-relay share add --session work --name Ubuntu
+herdr-relay share add --session default --name Ubuntu
 herdr-relay service install
 herdr-relay service start
 herdr-relay service status
 ```
 
-等状态显示 `Relay online` 后生成配对串：
+`herdr` 本身不需要 `--session`；Relay 的共享命令目前需要显式写 `--session default` 来选择默认会话。等状态显示 `Relay online` 后生成配对串：
 
 ```sh
 herdr-relay pair create
@@ -112,9 +112,9 @@ Ubuntu 的 Herdr 和 Relay 服务保持运行时，Mac 以后只需要重复最�
 Ubuntu 重启或用户会话结束后，按需重新打开 Herdr 并启动 Relay：
 
 ```sh
-herdr --session work
+herdr
 # Ctrl+B，然后 Q
 herdr-relay service start
 ```
 
-当前原生命令仍要求 `--host` 和 `--target`，尚无交互选设备或连接别名。`--profile` 是可选的高级隔离参数，不属于普通用户的必填步骤。
+当前 Relay 没有交互菜单，连接命令仍要求 `--host` 和 `--target`，尚无交互选设备或连接别名。Herdr 自身的终端界面与 Relay 的 CLI 是两个入口。`--profile` 是可选的高级隔离参数，不属于普通用户的必填步骤。

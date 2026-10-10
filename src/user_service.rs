@@ -8,17 +8,24 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::{
+        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        io::AsRawFd,
+    },
     path::{Path, PathBuf},
     process::Stdio,
 };
 
-#[derive(Serialize, Deserialize)]
+macro_rules! service_notice {
+    ($($arg:tt)*) => { if !crate::tui::is_active() { println!($($arg)*); } };
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Config {
+pub struct Config {
     version: u8,
-    origin: String,
-    start_at_login: bool,
+    pub origin: String,
+    pub start_at_login: bool,
 }
 struct Paths {
     directory: PathBuf,
@@ -156,6 +163,40 @@ fn atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         .and_then(|f| f.sync_all())
         .map_err(io)
 }
+// Serialize mutations from separate CLI installations as well as pending starts.
+fn mutation_lock(profile: &Path) -> Result<fs::File> {
+    let paths = Paths::new(profile)?;
+    private_directory(&paths.directory, true)?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(paths.directory.join("operation.lock"))
+        .map_err(io)?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(Error::new(
+            "SERVICE_BUSY",
+            "another service operation is in progress; retry when it finishes",
+        ));
+    }
+    Ok(lock)
+}
+fn clear_update_files(paths: &Paths) -> Result<()> {
+    for name in [
+        "pending-herdr-relay",
+        "previous-herdr-relay",
+        "previous-definition",
+    ] {
+        let path = paths.directory.join(name);
+        if exists(&path)? {
+            safe_file(&path)?;
+            fs::remove_file(path).map_err(io)?;
+        }
+    }
+    Ok(())
+}
 fn xml(value: &str) -> Result<String> {
     if value.chars().any(|c| c < ' ' || c == '\u{7f}') {
         return Err(Error::new(
@@ -178,8 +219,7 @@ fn definition(paths: &Paths, profile: &Path, origin: &str, login: bool) -> Resul
         paths.binary.to_str(),
         Some("--profile"),
         profile.to_str(),
-        Some("serve"),
-        Some("--relay"),
+        Some("daemon"),
         Some("--origin"),
         Some(origin),
     ]
@@ -231,8 +271,7 @@ fn linux_definition(paths: &Paths, profile: &Path, origin: &str) -> Result<Strin
         paths.binary.to_str(),
         Some("--profile"),
         profile.to_str(),
-        Some("serve"),
-        Some("--relay"),
+        Some("daemon"),
         Some("--origin"),
         Some(origin),
     ]
@@ -354,6 +393,7 @@ fn checked(result: std::process::Output) -> Result<()> {
 }
 pub async fn install(profile: &Path, origin: &str, login: bool) -> Result<()> {
     supported()?;
+    let _lock = mutation_lock(profile)?;
     Identity::load(profile)?;
     crate::pairing::Store::open(profile, origin)?;
     let paths = Paths::new(profile)?;
@@ -389,13 +429,206 @@ pub async fn install(profile: &Path, origin: &str, login: bool) -> Result<()> {
         checked(launch(&["daemon-reload"]).await?)?;
         checked(launch(&[if login { "enable" } else { "disable" }, &paths.target()]).await?)?;
     }
-    println!(
+    clear_update_files(&paths)?;
+    service_notice!(
         "Installed {}. Start with service start. Start at login: {login}.",
         paths.label
     );
     Ok(())
 }
+pub fn configuration(profile: &Path) -> Result<Option<Config>> {
+    if !profile.exists() {
+        return Ok(None);
+    }
+    let paths = Paths::new(profile)?;
+    if !paths.installed()? {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    safe_file(&paths.config)?
+        .take(8193)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|_| Error::new("SERVICE_CONFIG", "invalid installed service configuration"))
+}
+
+pub async fn set_autostart(profile: &Path, enabled: bool) -> Result<()> {
+    let _lock = mutation_lock(profile)?;
+    let mut config = configuration(profile)?.ok_or_else(|| {
+        Error::new(
+            "SERVICE_NOT_INSTALLED",
+            "run serve or service install first",
+        )
+    })?;
+    let paths = Paths::new(profile)?;
+    // Preserve the installed daemon invocation during a settings-only change:
+    // an older copied executable may not yet support the new daemon command.
+    if cfg!(target_os = "macos") {
+        let mut contents = String::new();
+        safe_file(&paths.definition)?
+            .take(65537)
+            .read_to_string(&mut contents)
+            .map_err(io)?;
+        let contents = contents.replace(
+            "<key>RunAtLoad</key><true/>",
+            "<key>RunAtLoad</key><false/>",
+        );
+        let contents = if enabled {
+            contents.replace(
+                "<key>RunAtLoad</key><false/>",
+                "<key>RunAtLoad</key><true/>",
+            )
+        } else {
+            contents
+        };
+        atomic(&paths.definition, contents.as_bytes(), 0o600)?;
+    }
+    if cfg!(target_os = "linux") {
+        checked(launch(&["daemon-reload"]).await?)?;
+        checked(launch(&[if enabled { "enable" } else { "disable" }, &paths.target()]).await?)?;
+    }
+    config.start_at_login = enabled;
+    atomic(
+        &paths.config,
+        &serde_json::to_vec(&config)
+            .map_err(|_| Error::new("SERVICE_CONFIG", "cannot encode service configuration"))?,
+        0o600,
+    )?;
+    Ok(())
+}
+
+pub async fn ensure(profile: &Path, origin: &str, autostart: bool) -> Result<()> {
+    match configuration(profile)? {
+        Some(config) => {
+            if config.origin != origin {
+                return Err(Error::new(
+                    "ORIGIN_MISMATCH",
+                    "installed service uses a different Relay; switch the Relay explicitly first",
+                ));
+            }
+            if config.start_at_login != autostart {
+                set_autostart(profile, autostart).await?;
+            }
+        }
+        None => install(profile, origin, autostart).await?,
+    }
+    if crate::service::status(profile).await.is_err() {
+        start(profile).await?;
+    }
+    Ok(())
+}
+
+/// Linger is a user-wide policy and is never disabled by service uninstall.
+pub async fn enable_boot_start(profile: &Path) -> Result<()> {
+    if !cfg!(target_os = "linux") {
+        return Err(Error::new(
+            "SERVICE_UNSUPPORTED",
+            "macOS autostart runs at login; boot-before-login is not supported",
+        ));
+    }
+    set_autostart(profile, true).await?;
+    // Enabling an already-enabled user policy must not require fresh polkit authorization.
+    let current = tokio::process::Command::new("/usr/bin/loginctl")
+        .args([
+            "show-user",
+            &unsafe { libc::geteuid() }.to_string(),
+            "--property=Linger",
+            "--value",
+        ])
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    if let Ok(Ok(output)) = tokio::time::timeout(std::time::Duration::from_secs(3), current).await
+        && output.status.success()
+        && output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout) == b"yes"
+    {
+        return Ok(());
+    }
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new("/usr/bin/loginctl")
+            .args(["enable-linger", &unsafe { libc::geteuid() }.to_string()])
+            .kill_on_drop(true)
+            .status(),
+    )
+    .await
+    .map_err(|_| Error::new("SERVICE_MANAGER", "enabling boot startup timed out"))?
+    .map_err(io)?;
+    if !result.success() {
+        return Err(Error::new(
+            "SERVICE_MANAGER",
+            "login startup is enabled, but boot/after-logout startup requires loginctl enable-linger authorization",
+        ));
+    }
+    Ok(())
+}
 pub async fn start(profile: &Path) -> Result<()> {
+    let _lock = mutation_lock(profile)?;
+    start_with_pending(profile).await
+}
+async fn reload_manager() -> Result<()> {
+    if cfg!(target_os = "linux") {
+        checked(launch(&["daemon-reload"]).await?)?;
+    }
+    Ok(())
+}
+async fn restore_service(profile: &Path, paths: &Paths, was_running: bool) -> Result<()> {
+    let _ = stop_inner(profile).await;
+    restore_previous(paths)?;
+    reload_manager().await?;
+    if was_running {
+        start_inner(profile).await.map_err(|_| {
+            Error::new(
+                "UPDATE_ROLLBACK",
+                "previous service restored but could not start; run service status",
+            )
+        })?;
+    }
+    Ok(())
+}
+async fn start_with_pending(profile: &Path) -> Result<()> {
+    let paths = Paths::new(profile)?;
+    let pending =
+        exists(&paths.directory.join("pending-herdr-relay"))? && job_pid(&paths).await?.is_none();
+    if !pending {
+        return start_inner(profile).await;
+    }
+    // launchd can retain an inactive job's old command; unload it before changing it.
+    stop_inner(profile).await?;
+    activate_pending(profile)?;
+    let result = async {
+        reload_manager().await?;
+        start_inner(profile).await
+    }
+    .await;
+    if let Err(error) = result {
+        restore_service(profile, &paths, true).await?;
+        return Err(Error::new(
+            "UPDATE_ACTIVATION",
+            format!(
+                "pending update failed ({}); previous service restored",
+                error.code
+            ),
+        ));
+    }
+    Ok(())
+}
+fn restore_previous(paths: &Paths) -> Result<()> {
+    atomic(
+        &paths.binary,
+        &fs::read(paths.directory.join("previous-herdr-relay")).map_err(io)?,
+        0o700,
+    )?;
+    atomic(
+        &paths.definition,
+        &fs::read(paths.directory.join("previous-definition")).map_err(io)?,
+        0o600,
+    )
+}
+
+async fn start_inner(profile: &Path) -> Result<()> {
     supported()?;
     let paths = Paths::new(profile)?;
     if !paths.installed()? {
@@ -437,7 +670,7 @@ pub async fn start(profile: &Path) -> Result<()> {
         if let Ok((origin, online, pid)) = crate::service::status(profile).await
             && job_pid(&paths).await? == Some(pid)
         {
-            println!(
+            service_notice!(
                 "Running ({origin}); Relay {}.",
                 if online { "online" } else { "connecting" }
             );
@@ -451,6 +684,10 @@ pub async fn start(profile: &Path) -> Result<()> {
     ))
 }
 pub async fn stop(profile: &Path) -> Result<()> {
+    let _lock = mutation_lock(profile)?;
+    stop_inner(profile).await
+}
+async fn stop_inner(profile: &Path) -> Result<()> {
     supported()?;
     let paths = Paths::new(profile)?;
     if loaded(&paths).await? {
@@ -466,7 +703,7 @@ pub async fn stop(profile: &Path) -> Result<()> {
             .await?,
         )?;
     }
-    println!("Stopped. Identity, grants, targets and Herdr processes are preserved.");
+    service_notice!("Stopped. Identity, grants, targets and Herdr processes are preserved.");
     Ok(())
 }
 pub async fn status(profile: &Path) -> Result<()> {
@@ -484,29 +721,35 @@ pub async fn status(profile: &Path) -> Result<()> {
             .kill_on_drop(true)
             .output();
         match tokio::time::timeout(std::time::Duration::from_secs(3), output).await {
-            Ok(Ok(result)) if result.status.success() => println!(
+            Ok(Ok(result)) if result.status.success() => service_notice!(
                 "Linger: {}. Login/session policy still controls user-service availability.",
                 String::from_utf8_lossy(&result.stdout).trim()
             ),
-            _ => println!(
+            _ => service_notice!(
                 "Linger: unknown. User-service availability after logout is not confirmed."
             ),
         }
     }
     if !paths.installed()? {
-        println!("Not installed.");
+        service_notice!("Not installed.");
         return Ok(());
     }
+    if let Some(config) = configuration(profile)? {
+        service_notice!("Start at login: {}.", config.start_at_login);
+    }
+    if exists(&paths.directory.join("pending-herdr-relay"))? {
+        service_notice!("Service update pending. Apply with service stop, then service start.");
+    }
     if !loaded(&paths).await? {
-        println!("Installed, stopped.");
+        service_notice!("Installed, stopped.");
         return Ok(());
     }
     match crate::service::status(profile).await {
-        Ok((origin, online, pid)) if job_pid(&paths).await? == Some(pid) => println!(
+        Ok((origin, online, pid)) if job_pid(&paths).await? == Some(pid) => service_notice!(
             "Running ({origin}); Relay {}.",
             if online { "online" } else { "connecting" }
         ),
-        _ => println!(
+        _ => service_notice!(
             "Loaded, but daemon is not responding. Stop it and run foreground serve for diagnosis."
         ),
     }
@@ -514,8 +757,10 @@ pub async fn status(profile: &Path) -> Result<()> {
 }
 pub async fn uninstall(profile: &Path) -> Result<()> {
     supported()?;
+    let _lock = mutation_lock(profile)?;
     let paths = Paths::new(profile)?;
-    stop(profile).await?;
+    stop_inner(profile).await?;
+    clear_update_files(&paths)?;
     if cfg!(target_os = "linux") && exists(&paths.definition)? {
         checked(launch(&["disable", &paths.target()]).await?)?;
     }
@@ -528,9 +773,182 @@ pub async fn uninstall(profile: &Path) -> Result<()> {
     if cfg!(target_os = "linux") {
         checked(launch(&["daemon-reload"]).await?)?;
     }
-    println!("Uninstalled user service. Identity, grants and shared targets are preserved.");
+    service_notice!("Uninstalled user service. Identity, grants and shared targets are preserved.");
     Ok(())
 }
 fn io(error: std::io::Error) -> Error {
     Error::new("SERVICE_IO", error.to_string())
+}
+
+fn activate_pending(profile: &Path) -> Result<()> {
+    let paths = Paths::new(profile)?;
+    let pending = paths.directory.join("pending-herdr-relay");
+    if !exists(&pending)? {
+        return Ok(());
+    }
+    let config = configuration(profile)?
+        .ok_or_else(|| Error::new("SERVICE_CONFIG", "missing service configuration"))?;
+    activate_files(&paths, profile, &config)
+}
+fn activate_files(paths: &Paths, profile: &Path, config: &Config) -> Result<()> {
+    let pending = paths.directory.join("pending-herdr-relay");
+    let mut bytes = Vec::new();
+    safe_file(&pending)?
+        .take(128 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    if bytes.len() > 128 * 1024 * 1024 {
+        return Err(Error::new(
+            "SERVICE_CONFIG",
+            "pending executable exceeds size limit",
+        ));
+    }
+    let old = fs::read(&paths.binary).map_err(io)?;
+    let old_definition = fs::read(&paths.definition).map_err(io)?;
+    atomic(&paths.directory.join("previous-herdr-relay"), &old, 0o700)?;
+    atomic(
+        &paths.directory.join("previous-definition"),
+        &old_definition,
+        0o600,
+    )?;
+    let activation = (|| {
+        atomic(&paths.binary, &bytes, 0o700)?;
+        atomic(
+            &paths.definition,
+            definition(
+                paths,
+                &fs::canonicalize(profile).map_err(io)?,
+                &config.origin,
+                config.start_at_login,
+            )?
+            .as_bytes(),
+            0o600,
+        )?;
+        fs::remove_file(&pending).map_err(io)?;
+        Ok(())
+    })();
+    if let Err(error) = activation {
+        restore_previous(paths)?;
+        // A failed candidate must not be retried implicitly by service start.
+        if exists(&pending)? {
+            fs::remove_file(&pending).map_err(io)?;
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub async fn upgrade(profile: &Path, bytes: &[u8], force_restart: bool) -> Result<&'static str> {
+    if configuration(profile)?.is_none() {
+        return Ok("No background service is installed.");
+    }
+    let _lock = mutation_lock(profile)?;
+    let paths = Paths::new(profile)?;
+    atomic(&paths.directory.join("pending-herdr-relay"), bytes, 0o700)?;
+    let running = job_pid(&paths).await?.is_some();
+    // Hold every native reservation until the daemon has stopped. This closes
+    // the check-to-stop race without disconnecting an already attached client.
+    let mut reservations = Vec::new();
+    if running && !force_restart {
+        for target in crate::targets::Store::open(profile)?
+            .list()?
+            .into_iter()
+            .filter(|t| t.enabled)
+        {
+            if let Ok(native) = target.locator.resolve() {
+                match native.reserve() {
+                    Ok(lock) => reservations.push(lock),
+                    Err(_) => {
+                        return Ok(
+                            "CLI updated; service update pending because a session is active. Apply later with service stop && service start, or update --restart-service.",
+                        );
+                    }
+                }
+            }
+        }
+    }
+    stop_inner(profile).await?;
+    drop(reservations);
+    if let Err(error) = activate_pending(profile) {
+        if running {
+            start_inner(profile).await?;
+        }
+        return Err(error);
+    }
+    let activation = async {
+        reload_manager().await?;
+        if running {
+            start_inner(profile).await?;
+        }
+        Ok::<_, Error>(())
+    }
+    .await;
+    if let Err(error) = activation {
+        restore_service(profile, &paths, running).await?;
+        return Err(Error::new(
+            "UPDATE_ACTIVATION",
+            format!(
+                "new service failed ({}); previous service restored",
+                error.code
+            ),
+        ));
+    }
+    Ok(if running {
+        "Background service upgraded and restarted."
+    } else {
+        "Background service upgraded; it remains stopped."
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn service_activation_rolls_back_both_files_and_discards_failed_candidate() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            directory: root.path().to_owned(),
+            binary: root.path().join("herdr-relay"),
+            config: root.path().join("config.json"),
+            definition: root.path().join("service-definition"),
+            label: "test".into(),
+        };
+        let config = Config {
+            version: 1,
+            origin: "https://relay.example".into(),
+            start_at_login: true,
+        };
+        atomic(&paths.binary, b"old executable", 0o700).unwrap();
+        atomic(&paths.definition, b"old serve --relay definition", 0o600).unwrap();
+        let pending = paths.directory.join("pending-herdr-relay");
+        atomic(&pending, b"new executable", 0o700).unwrap();
+        activate_files(&paths, root.path(), &config).unwrap();
+        assert_eq!(fs::read(&paths.binary).unwrap(), b"new executable");
+        let stable = fs::read(&paths.definition).unwrap();
+        assert!(String::from_utf8_lossy(&stable).contains("daemon"));
+        assert!(!pending.exists());
+        restore_previous(&paths).unwrap();
+        assert_eq!(fs::read(&paths.binary).unwrap(), b"old executable");
+        assert_eq!(
+            fs::read(&paths.definition).unwrap(),
+            b"old serve --relay definition"
+        );
+        atomic(&pending, b"bad candidate", 0o700).unwrap();
+        let invalid = Config {
+            origin: "invalid\norigin".into(),
+            ..config
+        };
+        assert_eq!(
+            activate_files(&paths, root.path(), &invalid)
+                .unwrap_err()
+                .code,
+            "SERVICE_PATH"
+        );
+        assert_eq!(fs::read(&paths.binary).unwrap(), b"old executable");
+        assert_eq!(
+            fs::read(&paths.definition).unwrap(),
+            b"old serve --relay definition"
+        );
+        assert!(!pending.exists());
+    }
 }

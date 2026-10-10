@@ -37,6 +37,19 @@ export interface Env extends AdmissionEnv {
 }
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    if (request.method === 'GET' && new URL(request.url).pathname === '/pair') {
+      return new Response(
+        '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pair Herdr Relay</title><main><h1>Connect to your Herdr host</h1><p>On the client computer, run <code>herdr-relay pair</code> and paste the complete link from your address bar.</p><p>This page does not redeem the invitation. Pairing links expire after ten minutes and can grant access once.</p></main></html>',
+        {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+            'Referrer-Policy': 'no-referrer',
+            'Cache-Control': 'no-store',
+          },
+        },
+      );
+    }
     let lease: string | undefined,
       status = 200;
     try {

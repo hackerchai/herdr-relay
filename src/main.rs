@@ -6,12 +6,62 @@ const DEFAULT_RELAY_ORIGIN: &str = "https://herdr-relay.hackerchai.com";
 
 #[cfg(test)]
 mod cli_tests {
+    #[test]
+    fn interactive_defaults_and_unattended_service_parse_separately() {
+        use super::{Action, Cli};
+        use clap::Parser;
+        assert!(
+            Cli::try_parse_from(["herdr-relay"])
+                .unwrap()
+                .command
+                .is_none()
+        );
+        assert!(matches!(
+            Cli::try_parse_from(["herdr-relay", "pair"])
+                .unwrap()
+                .command,
+            Some(Action::Pair { action: None })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["herdr-relay", "connect"])
+                .unwrap()
+                .command,
+            Some(Action::Connect {
+                host: None,
+                target: None,
+                ..
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["herdr-relay", "serve"])
+                .unwrap()
+                .command,
+            Some(Action::Serve {
+                foreground: false,
+                relay: false,
+                ..
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["herdr-relay", "daemon"])
+                .unwrap()
+                .command,
+            Some(Action::Daemon { .. })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["herdr-relay", "serve", "--relay"])
+                .unwrap()
+                .command,
+            Some(Action::Serve { relay: true, .. })
+        ));
+    }
+
     use super::*;
 
     #[test]
     fn hosted_origin_is_the_default_and_self_hosting_stays_explicit() {
         let cli = Cli::try_parse_from(["herdr-relay", "serve", "--relay"]).unwrap();
-        let Action::Serve { origin, .. } = cli.command else {
+        let Some(Action::Serve { origin, .. }) = cli.command else {
             panic!("serve command")
         };
         assert_eq!(origin, "https://herdr-relay.hackerchai.com");
@@ -26,7 +76,7 @@ mod cli_tests {
             "https://example.com",
         ])
         .unwrap();
-        let Action::Connect { origin, .. } = cli.command else {
+        let Some(Action::Connect { origin, .. }) = cli.command else {
             panic!("connect command")
         };
         assert_eq!(origin, "https://example.com");
@@ -34,32 +84,63 @@ mod cli_tests {
 }
 
 #[derive(Parser)]
-#[command(version, about = "Connect to explicitly selected Herdr instances")]
+#[command(
+    version,
+    about = "Share and connect to Herdr sessions by name",
+    after_help = "Quick start:\n  Server: herdr-relay serve\n  Client: herdr-relay pair (paste a link), then herdr-relay\n  Maintenance: herdr-relay service --help\n\nIn menus: arrows / j,k move; Space selects; Enter applies; ? / F1 opens help; Esc returns."
+)]
 struct Cli {
     /// Private Relay state directory (separate from Herdr configuration).
     #[arg(long, global = true)]
     profile: Option<PathBuf>,
     #[command(subcommand)]
-    command: Action,
+    command: Option<Action>,
 }
 
 #[derive(Subcommand)]
 enum Action {
+    /// Update from the latest complete stable GitHub Release.
+    #[command(display_order = 40)]
+    Update {
+        /// Report the available version without installing it.
+        #[arg(long)]
+        check: bool,
+        /// Restart the server even if clients are attached; also apply pending updates.
+        #[arg(long)]
+        restart_service: bool,
+        /// GitHub owner/repository hosting release assets.
+        #[arg(long)]
+        repository: Option<String>,
+    },
+    /// Run the Relay service without a terminal (used by service managers).
+    #[command(hide = true)]
+    Daemon {
+        #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+        #[arg(long, hide = true)]
+        relay_local_url: Option<String>,
+    },
     /// Change the Relay trust scope while preserving identity and shared targets.
+    #[command(hide = true)]
     Relay {
         #[command(subcommand)]
         action: RelayAction,
     },
     /// Manage this profile's background user service (never starts Herdr).
+    #[command(display_order = 50)]
     Service {
         #[command(subcommand)]
         action: ServiceAction,
     },
-    /// Run the foreground device service, optionally publishing an existing Herdr instance.
+    /// Select Herdr sessions to share and start the background service.
+    #[command(display_order = 10)]
     Serve {
         #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
-        /// Also publish this device's pairing service through its Relay origin.
+        /// Run without menus in the foreground (local diagnostics).
+        #[arg(long)]
+        foreground: bool,
+        /// Compatibility: run the publishing daemon without menus.
         #[arg(long)]
         relay: bool,
         /// Explicit loopback HTTP transport for local Workers development only.
@@ -69,7 +150,7 @@ enum Action {
         session: Option<String>,
         #[arg(long, requires = "relay")]
         socket: Option<PathBuf>,
-        #[arg(long, requires = "session")]
+        #[arg(long)]
         herdr_config_dir: Option<PathBuf>,
         /// Name is sent only inside the device-encrypted channel.
         #[arg(long)]
@@ -77,6 +158,7 @@ enum Action {
     },
     /// List shared targets and their encrypted status on an authorized host.
     #[command(alias = "status")]
+    #[command(hide = true)]
     Targets {
         #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
@@ -85,45 +167,52 @@ enum Action {
         #[arg(long)]
         relay_local_url: Option<String>,
     },
-    /// Connect to a shared target using the official native Herdr client.
+    /// Choose a host and Herdr session in the terminal menu.
+    #[command(display_order = 30)]
     Connect {
         #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
         #[arg(long)]
-        host: String,
+        host: Option<String>,
         #[arg(long)]
-        target: String,
+        target: Option<String>,
         #[arg(long, default_value = "herdr")]
         herdr: PathBuf,
         #[arg(long)]
         relay_local_url: Option<String>,
     },
     /// Add or manage persistent, explicitly shared local targets.
+    #[command(hide = true)]
     Share {
         #[command(subcommand)]
         action: ShareAction,
     },
-    /// Create, import, or invalidate a one-time pairing invitation.
+    /// Paste a pairing link to add a host and choose its session.
+    #[command(display_order = 20)]
     Pair {
         #[command(subcommand)]
-        action: PairAction,
+        action: Option<PairAction>,
     },
     /// Show independent incoming and outgoing device grants.
+    #[command(hide = true)]
     Devices {
         #[arg(long, default_value = DEFAULT_RELAY_ORIGIN)]
         origin: String,
     },
     /// Manage incoming device authorization; reverse grants remain independent.
+    #[command(hide = true)]
     Peers {
         #[command(subcommand)]
         action: PeerAction,
     },
     /// Initialize, inspect, or locally diagnose a persistent device identity.
+    #[command(hide = true)]
     Identity {
         #[command(subcommand)]
         action: IdentityAction,
     },
     /// Connect an official Herdr 0.9.3 client through a local byte-stream bridge.
+    #[command(hide = true)]
     Local {
         #[arg(long, required_unless_present = "socket", conflicts_with = "socket")]
         session: Option<String>,
@@ -166,11 +255,23 @@ enum ServiceAction {
         #[arg(long)]
         start_at_login: bool,
     },
+    /// Configure server autostart; boot mode is available on Linux.
+    Autostart {
+        #[arg(value_enum)]
+        mode: AutostartMode,
+    },
     Start,
     Stop,
     Status,
     /// Remove the service; preserve identity, grants and shared targets.
     Uninstall,
+}
+
+#[derive(clap::ValueEnum, Clone)]
+enum AutostartMode {
+    On,
+    Off,
+    Boot,
 }
 
 #[derive(Subcommand)]
@@ -242,13 +343,39 @@ enum IdentityAction {
 #[tokio::main]
 async fn main() {
     if let Err(error) = run(Cli::parse()).await {
+        if error.code == "BACK" {
+            return;
+        }
         eprintln!("{error}");
         std::process::exit(if error.code == "CANCELLED" { 130 } else { 1 });
     }
 }
 
 async fn run(cli: Cli) -> Result<()> {
-    match cli.command {
+    match cli.command.unwrap_or(Action::Connect {
+        origin: DEFAULT_RELAY_ORIGIN.into(),
+        host: None,
+        target: None,
+        herdr: "herdr".into(),
+        relay_local_url: None,
+    }) {
+        Action::Update {
+            check,
+            restart_service,
+            repository,
+        } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            herdr_relay::update::run(&profile, check, restart_service, repository.as_deref()).await
+        }
+        Action::Daemon {
+            origin,
+            relay_local_url,
+        } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            let remote =
+                herdr_relay::relay::Relay::new(&profile, &origin, relay_local_url.as_deref())?;
+            herdr_relay::service::run(&profile, &origin, Some(remote)).await
+        }
         Action::Relay {
             action:
                 RelayAction::Status {
@@ -284,6 +411,14 @@ async fn run(cli: Cli) -> Result<()> {
                     origin,
                     start_at_login,
                 } => managed::install(&profile, &origin, start_at_login).await,
+                ServiceAction::Autostart { mode } => {
+                    match mode {
+                        AutostartMode::On => managed::set_autostart(&profile, true).await?,
+                        AutostartMode::Off => managed::set_autostart(&profile, false).await?,
+                        AutostartMode::Boot => managed::enable_boot_start(&profile).await?,
+                    }
+                    managed::status(&profile).await
+                }
                 ServiceAction::Start => managed::start(&profile).await,
                 ServiceAction::Stop => managed::stop(&profile).await,
                 ServiceAction::Status => managed::status(&profile).await,
@@ -292,6 +427,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Action::Serve {
             origin,
+            foreground,
             relay,
             relay_local_url,
             session,
@@ -300,6 +436,14 @@ async fn run(cli: Cli) -> Result<()> {
             name,
         } => {
             let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            if !foreground && !relay {
+                return herdr_relay::interactive::serve(
+                    &profile,
+                    &origin,
+                    &herdr_config_dir.map(Ok).unwrap_or_else(config_dir)?,
+                )
+                .await;
+            }
             let remote = if relay {
                 Some(herdr_relay::relay::Relay::new(
                     &profile,
@@ -407,6 +551,15 @@ async fn run(cli: Cli) -> Result<()> {
             relay_local_url,
         } => {
             let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            if host.is_none() && target.is_none() {
+                return herdr_relay::interactive::connect(&profile, &origin, &herdr, None).await;
+            }
+            let (Some(host), Some(target)) = (host, target) else {
+                return Err(Error::new(
+                    "CONNECT_ARGUMENTS",
+                    "use connect without arguments for the host/session menu, or provide both --host and --target",
+                ));
+            };
             herdr_relay::client::check_version(&herdr).await?;
             let relay =
                 herdr_relay::relay::Relay::new(&profile, &origin, relay_local_url.as_deref())?;
@@ -438,6 +591,10 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Action::Pair { action } => {
             let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            let Some(action) = action else {
+                return herdr_relay::interactive::pair(&profile, std::path::Path::new("herdr"))
+                    .await;
+            };
             match action {
                 PairAction::Create => {
                     let invitation = herdr_relay::service::create_invitation(&profile).await?;
@@ -451,8 +608,9 @@ async fn run(cli: Cli) -> Result<()> {
                     local_socket,
                     relay_local_url,
                 } => {
-                    let invitation =
-                        herdr_relay::pairing::Invitation::decode(&read_invitation().await?)?;
+                    let link = herdr_relay::names::PairLink::decode(&read_invitation().await?)?;
+                    let invitation = link.invitation;
+                    herdr_relay::identity::Identity::initialize(&profile)?;
                     let receipt = if let Some(local_socket) = local_socket {
                         herdr_relay::service::accept_local(&profile, &local_socket, &invitation)
                             .await?
@@ -465,9 +623,16 @@ async fn run(cli: Cli) -> Result<()> {
                         .accept(&invitation)
                         .await?
                     };
+                    let host = herdr_relay::names::remember(
+                        &profile,
+                        &invitation.origin,
+                        &receipt.publisher,
+                        link.hostname.as_deref(),
+                        None,
+                    )?;
                     println!(
-                        "Paired: this device may access {} (grant {}). Reverse access was not granted.",
-                        receipt.publisher, receipt.grant_version
+                        "Paired with {}. Run herdr-relay to select a session. Reverse access was not granted.",
+                        host.alias
                     );
                 }
                 PairAction::Revoke { invitation_id } => {

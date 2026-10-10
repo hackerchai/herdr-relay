@@ -1,0 +1,482 @@
+use crate::{
+    Error, Result,
+    identity::Identity,
+    names::{self, PairLink},
+    targets::{Definition, Locator, Store},
+    tui::{Choice, Screen},
+    user_service,
+};
+use crossterm::event::{Event, KeyCode};
+use futures_util::{StreamExt, stream};
+use std::{path::Path, time::Duration};
+
+pub const DEFAULT_ORIGIN: &str = "https://herdr-relay.hackerchai.com";
+
+#[derive(Clone)]
+struct Session {
+    name: String,
+    locator: Locator,
+    selected: bool,
+    online: bool,
+}
+fn discover(config: &Path, existing: &[Definition]) -> Vec<Session> {
+    let mut sessions: Vec<_> = existing
+        .iter()
+        .map(|t| Session {
+            name: t.name.clone(),
+            locator: t.locator.clone(),
+            selected: t.enabled,
+            online: t.locator.resolve().is_ok(),
+        })
+        .collect();
+    let mut names = vec!["default".to_owned()];
+    if let Ok(entries) = std::fs::read_dir(config.join("sessions")) {
+        names.extend(entries.filter_map(|e| e.ok()?.file_name().into_string().ok()));
+    }
+    names.sort();
+    names.dedup();
+    for name in names {
+        let locator = Locator::Session {
+            config_dir: config.to_path_buf(),
+            session: name.clone(),
+        };
+        if let Ok(native) = locator.resolve() {
+            if sessions.iter().any(|s| {
+                s.locator == locator
+                    || s.locator
+                        .resolve()
+                        .is_ok_and(|other| other.same_instance(&native))
+            }) {
+                continue;
+            }
+            sessions.push(Session {
+                name,
+                locator,
+                selected: false,
+                online: true,
+            });
+        }
+    }
+    sessions
+}
+
+pub async fn serve(profile: &Path, origin: &str, config: &Path) -> Result<()> {
+    let saved = crate::pairing::Store::saved_origin(profile)?;
+    let origin = if origin == DEFAULT_ORIGIN {
+        saved.as_deref().unwrap_or(origin)
+    } else {
+        origin
+    };
+    let mut screen = Screen::new()?;
+    let mut autostart = user_service::configuration(profile)?
+        .map(|c| c.start_at_login)
+        .unwrap_or(true);
+    loop {
+        let expected = if profile.join("identity").exists() {
+            Store::open(profile)?.list()?
+        } else {
+            vec![]
+        };
+        let mut sessions = discover(config, &expected);
+        let mut selected: usize = 0;
+        let apply = loop {
+            let rows: Vec<_> = sessions
+                .iter()
+                .map(|s| {
+                    format!(
+                        "[{}] {}  ({})",
+                        if s.selected { 'x' } else { ' ' },
+                        names::display(&s.name),
+                        if s.online {
+                            "running"
+                        } else {
+                            "offline, saved"
+                        }
+                    )
+                })
+                .collect();
+            let hint = if rows.is_empty() {
+                "No running Herdr sessions. Run herdr in another terminal, detach, then press r.\nRelay only shares sessions you explicitly select."
+            } else {
+                "Space selects sessions. Enter applies the entire selection. Unchecked sessions stop sharing."
+            };
+            screen.render(
+                &format!("Share sessions on {}", names::hostname()),
+                &rows,
+                selected,
+                &format!(
+                    "{hint}\nStart at login: {} (a toggles)",
+                    if autostart { "on" } else { "off" }
+                ),
+                "Space Select    Enter Apply    a Autostart    r Refresh    ? Help    Esc Exit",
+            )?;
+            if let Event::Key(key) = screen.event().await? {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1).min(sessions.len().saturating_sub(1)),
+                    KeyCode::Char(' ') if !sessions.is_empty() => sessions[selected].selected = !sessions[selected].selected,
+                    KeyCode::Char('a') => autostart = !autostart,
+                    KeyCode::Char('r') => break false,
+                    KeyCode::Enter if !sessions.is_empty() => break true,
+                    KeyCode::Char('?') | KeyCode::F(1) => screen.help("Only selected sessions are shared. Existing paired clients can access all shared sessions.\nAutostart: macOS launchd / Linux systemd, at user login.\nLinux boot/after-logout mode: herdr-relay service autostart boot.\nNo Herdr session is created or stopped by this menu.").await?,
+                    _ => {},
+                }
+            }
+        };
+        if !apply {
+            continue;
+        }
+        let chosen: Vec<_> = sessions
+            .iter()
+            .filter(|s| s.selected)
+            .map(|s| (s.name.clone(), s.locator.clone()))
+            .collect();
+        let result = async {
+            Identity::initialize(profile)?;
+            crate::pairing::Store::open(profile, origin)?;
+            // Validate the installed origin before committing the selection.
+            if user_service::configuration(profile)?.is_some_and(|c| c.origin != origin) {
+                return Err(Error::new(
+                    "ORIGIN_MISMATCH",
+                    "the installed service uses another Relay; switch it explicitly first",
+                ));
+            }
+            Store::open(profile)?.apply_selection(&expected, &chosen)?;
+            user_service::ensure(profile, origin, autostart).await?;
+            crate::service::reload_targets(profile).await?;
+            for _ in 0..40 {
+                if crate::service::status(profile)
+                    .await
+                    .is_ok_and(|(_, online, _)| online)
+                {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(Error::new(
+                "RELAY_CONNECTING",
+                "sharing is saved and the service is running, but the Relay is not online yet; check service status and retry",
+            ))
+        };
+        match screen
+            .wait("Applying sharing and starting service", result)
+            .await
+        {
+            Ok(()) => {
+                let link = invitation_screen(&mut screen, profile).await?;
+                drop(screen);
+                if let Some(link) = link {
+                    println!(
+                        "Pairing link (one use, expires in 10 minutes):\n{link}\n\nSharing continues in the background."
+                    );
+                }
+                return Ok(());
+            }
+            Err(e) if e.code == "BACK" => return Ok(()),
+            Err(e) if e.code == "CANCELLED" => return Err(e),
+            Err(e) => {
+                screen
+                    .message("Setup needs attention", &e.to_string())
+                    .await?
+            }
+        }
+    }
+}
+
+async fn invitation_screen(screen: &mut Screen, profile: &Path) -> Result<Option<String>> {
+    loop {
+        let invitation = screen
+            .wait(
+                "Creating pairing link",
+                crate::service::create_invitation(profile),
+            )
+            .await?;
+        let link = PairLink::encode(invitation, names::hostname())?;
+        let rows = vec![
+            "Copy pairing link".into(),
+            "Print link and finish".into(),
+            "Generate a fresh link".into(),
+            "Done".into(),
+        ];
+        loop {
+            match screen.choose("Sharing is running", &rows, "On the other computer run herdr-relay pair and paste the link.\nLinks expire after 10 minutes and grant one-way access to all shared sessions.", false).await? {
+                Choice::Pick(0) => match copy_link(&link).await {
+                    Ok(()) => screen.message("Copied", "Paste into herdr-relay pair on the client. The link expires in 10 minutes.").await?,
+                    Err(_) => screen.message("Clipboard unavailable", "Choose Print link and finish, then copy the link from your terminal.").await?,
+                },
+                Choice::Pick(1) => return Ok(Some(link)),
+                Choice::Pick(2) | Choice::Refresh => break,
+                Choice::Pick(_) | Choice::Back => return Ok(None),
+                Choice::Rename(_) => {},
+            }
+        }
+    }
+}
+async fn copy_link(value: &str) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let programs: &[(&str, &[&str])] = if cfg!(target_os = "macos") {
+        &[("/usr/bin/pbcopy", &[])]
+    } else {
+        &[("wl-copy", &[]), ("xclip", &["-selection", "clipboard"])]
+    };
+    for (program, args) in programs {
+        let result = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut child = tokio::process::Command::new(program)
+                .args(*args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(value.as_bytes()).await?;
+            }
+            child.wait().await
+        })
+        .await;
+        if matches!(result, Ok(Ok(status)) if status.success()) {
+            return Ok(());
+        }
+    }
+    Err(Error::new("CLIPBOARD", "clipboard unavailable"))
+}
+
+async fn pair_in(screen: &mut Screen, profile: &Path) -> Result<Option<(String, String)>> {
+    loop {
+        let Some(value) = screen
+            .input(
+                "Pair a host",
+                "Paste the complete pairing link from herdr-relay serve.",
+                true,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let result = async {
+            let link = PairLink::decode(&value)?;
+            Identity::initialize(profile)?;
+            let relay = crate::relay::Relay::new(profile, &link.invitation.origin, None)?;
+            relay.accept(&link.invitation).await?;
+            let host = names::remember(
+                profile,
+                &link.invitation.origin,
+                &link.invitation.publisher,
+                link.hostname.as_deref(),
+                None,
+            )?;
+            Ok((host.origin, host.identity, host.alias))
+        };
+        match screen.wait("Pairing with the host", result).await {
+            Ok((origin, identity, alias)) => {
+                screen.message("Paired", &format!("You can now access {alias}.\nChoose a shared session next. Reverse access is not granted.")).await?;
+                return Ok(Some((origin, identity)));
+            }
+            Err(e) if e.code == "BACK" => continue,
+            Err(e) if e.code == "CANCELLED" => return Err(e),
+            Err(e) => screen.message("Could not pair", &e.to_string()).await?,
+        }
+    }
+}
+
+pub async fn pair(profile: &Path, herdr: &Path) -> Result<()> {
+    let mut screen = Screen::new()?;
+    let paired = pair_in(&mut screen, profile).await?;
+    drop(screen);
+    if let Some((origin, identity)) = paired {
+        connect(profile, &origin, herdr, Some(identity)).await?;
+    }
+    Ok(())
+}
+
+pub async fn connect(
+    profile: &Path,
+    origin: &str,
+    herdr: &Path,
+    mut selected_host: Option<String>,
+) -> Result<()> {
+    let mut screen = Screen::new()?;
+    let mut origin = if origin == DEFAULT_ORIGIN {
+        crate::pairing::Store::saved_origin(profile)?.unwrap_or_else(|| origin.to_owned())
+    } else {
+        origin.to_owned()
+    };
+    loop {
+        if !profile.join("identity").exists() {
+            let rows = vec!["Pair a host using a link".into()];
+            match screen
+                .choose(
+                    "Welcome",
+                    &rows,
+                    "Run herdr-relay serve on the computer you want to access.",
+                    false,
+                )
+                .await?
+            {
+                Choice::Back => return Ok(()),
+                Choice::Pick(_) => {
+                    if let Some((new_origin, host)) = pair_in(&mut screen, profile).await? {
+                        origin = new_origin;
+                        selected_host = Some(host);
+                    }
+                }
+                _ => {}
+            }
+            if !profile.join("identity").exists() {
+                continue;
+            }
+        }
+        let grants = crate::pairing::Store::open(profile, &origin)?
+            .grants()?
+            .accessible_hosts;
+        let hosts: Vec<_> = grants
+            .iter()
+            .map(|g| names::remember(profile, &origin, &g.device_id, None, None))
+            .collect::<Result<_>>()?;
+        let relay = crate::relay::Relay::new(profile, &origin, None)?;
+        let host = if let Some(identity) = selected_host.take() {
+            hosts.iter().find(|h| h.identity == identity).cloned()
+        } else {
+            let mut rows: Vec<_> = hosts
+                .iter()
+                .map(|h| format!("{}   checking…", h.alias))
+                .collect();
+            rows.push("+ Pair another host".into());
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let jobs: Vec<_> = hosts
+                .iter()
+                .enumerate()
+                .map(|(index, host)| (index, host.clone(), relay.clone()))
+                .collect();
+            let mut tasks = tokio::task::JoinSet::new();
+            tasks.spawn(async move {
+                let mut checks = stream::iter(jobs)
+                    .map(|(index, host, relay)| async move {
+                        let status = match tokio::time::timeout(
+                            Duration::from_secs(6),
+                            relay.targets(&host.identity),
+                        )
+                        .await
+                        {
+                            Ok(Ok(_)) => "online",
+                            Ok(Err(e)) if e.code == "NOT_AUTHORIZED" => "access revoked",
+                            _ => "offline / unavailable",
+                        };
+                        (index, format!("{}   {status}", host.alias))
+                    })
+                    .buffer_unordered(4);
+                while let Some(update) = checks.next().await {
+                    if tx.send(update).is_err() {
+                        break;
+                    }
+                }
+            });
+            let choice = screen
+                .choose_live(
+                    "Choose a host",
+                    &rows,
+                    "Select a host to browse its shared Herdr sessions. Aliases are saved locally.",
+                    true,
+                    Some(&mut rx),
+                )
+                .await?;
+            drop(tasks);
+            match choice {
+                Choice::Back => return Ok(()),
+                Choice::Refresh => continue,
+                Choice::Rename(i) if i < hosts.len() => {
+                    if let Some(alias) = screen.input("Rename host", "Choose a unique local alias. This does not change the host's identity or authorization.", false).await?
+                        && let Err(e) = names::remember(profile, &origin, &hosts[i].identity, None, Some(&alias)) { screen.message("Could not rename", &e.to_string()).await?; }
+                    continue;
+                }
+                Choice::Pick(i) if i < hosts.len() => Some(hosts[i].clone()),
+                Choice::Pick(_) => {
+                    if let Some((new_origin, host)) = pair_in(&mut screen, profile).await? {
+                        origin = new_origin;
+                        selected_host = Some(host);
+                    }
+                    continue;
+                }
+                _ => continue,
+            }
+        };
+        let Some(host) = host else {
+            continue;
+        };
+        loop {
+            let targets = match screen
+                .wait("Loading shared sessions", relay.targets(&host.identity))
+                .await
+            {
+                Ok(targets) => targets,
+                Err(e) if e.code == "BACK" => break,
+                Err(e) if e.code == "CANCELLED" => return Err(e),
+                Err(e) => {
+                    screen
+                        .message(
+                            "Host unavailable",
+                            &format!(
+                                "{}: {}\nRefresh later or check the server's service status.",
+                                host.alias, e.code
+                            ),
+                        )
+                        .await?;
+                    break;
+                }
+            };
+            let rows: Vec<_> = targets
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{}   {}",
+                        names::display(&t.name),
+                        names::display(&t.status)
+                    )
+                })
+                .collect();
+            match screen.choose(&format!("Sessions on {}", host.alias), &rows, if rows.is_empty() { "No sessions are currently shared. Select sessions with herdr-relay serve on this host." } else { "Enter connects. Detach from Herdr with Ctrl-B, release, then Q to return here." }, false).await? {
+                Choice::Back => break,
+                Choice::Refresh => continue,
+                Choice::Pick(index) => {
+                    let target = &targets[index];
+                    if target.status != "online" { screen.message("Session unavailable", "This session is offline or busy. Refresh after it becomes available.").await?; continue; }
+                    if let Err(e) = screen.wait("Checking Herdr client", crate::client::check_version(herdr)).await { if e.code == "BACK" { continue; }
+                    if e.code == "CANCELLED" { return Err(e); } screen.message("Herdr is required", &e.to_string()).await?; continue; }
+                    // Stop rendering and release all input ownership before native attach.
+                    drop(screen);
+                    let result = crate::client::connect_remote(relay.clone(), &host.identity, &target.id, herdr, "herdr-relay").await;
+                    screen = Screen::new()?;
+                    if let Err(e) = result {
+                        if e.code == "CANCELLED" { return Ok(()); }
+                        screen.message("Connection ended", &format!("{} / {}: {}", host.alias, names::display(&target.name), e.message)).await?;
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn discovery_keeps_saved_offline_sessions_and_enabled_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let locator = Locator::Session {
+            config_dir: tmp.path().into(),
+            session: "work".into(),
+        };
+        let existing = vec![Definition {
+            id: "a".repeat(32),
+            name: "work".into(),
+            locator,
+            enabled: true,
+        }];
+        let sessions = discover(tmp.path(), &existing);
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].selected);
+        assert!(!sessions[0].online);
+    }
+}

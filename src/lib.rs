@@ -4,6 +4,8 @@ pub mod control;
 pub mod frame;
 pub mod host;
 pub mod identity;
+pub mod interactive;
+pub mod names;
 pub mod native;
 pub mod pairing;
 pub mod relay;
@@ -14,6 +16,8 @@ pub mod stream;
 pub mod targets;
 pub mod terminal;
 pub mod transport;
+pub mod tui;
+pub mod update;
 pub mod user_service;
 
 #[derive(Debug)]
