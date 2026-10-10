@@ -20,6 +20,11 @@ bounded Herdr server. Checksums and source manifests accompany the private GitHu
 assets. The CLI source is published publicly to crates.io under MIT; Worker
 source and the upstream patch/build materials are explicitly included.
 
+Native build caches cover compiler-output directories only. Verified upstream
+source is prepared separately; restoring a pruned parent `target` cache can
+otherwise recreate an incomplete source directory without its patch stamp.
+The cache prefix was changed after this was observed during the first release.
+
 After artifact construction succeeds, the workflow verifies the account remains
 on Workers Free and deploys the matching Worker through pinned Wrangler. A TLS
 and protocol probe checks the production hostname. Every stage must pass;

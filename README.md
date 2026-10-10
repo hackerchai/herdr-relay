@@ -11,6 +11,11 @@ contains CLI and Worker source plus self-host materials. Four-platform binary
 assets are available to repository members. [Release readiness](docs/release-readiness.md)
 records publication and acceptance evidence.
 
+[Version 0.1.1 is published on crates.io](https://crates.io/crates/herdr-relay/0.1.1).
+Install with `cargo install herdr-relay --locked` (Rust 1.99 or newer).
+The [release record](docs/validation/2026-10-10-release-0.1.1.md) identifies the
+four-platform assets, production deployment and actual acceptance coverage.
+
 For the bounded native server, use the [Herdr 0.9.3 compatibility patch](patches/herdr/README.md).
 An unmodified upstream server still has its original unbounded control queue.
 The maintainer accepted GUI testing; the [candidate record](docs/validation/2026-10-10-candidates.md)
