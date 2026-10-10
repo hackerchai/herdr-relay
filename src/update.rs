@@ -207,7 +207,10 @@ pub async fn run(
         println!("The installed version is newer; no downgrade performed.");
         return Ok(());
     }
-    if latest == current && !restart_service {
+    if latest == current
+        && !restart_service
+        && !crate::user_service::needs_upgrade(profile, version).await?
+    {
         println!(
             "Already up to date. Use --restart-service to also apply a pending server update."
         );
