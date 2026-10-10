@@ -32,6 +32,9 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      # GitHub exposes draft releases only to callers with push access.
+      contents: write
     outputs:
       sha: ${{ steps.version.outputs.sha }}
     steps:
