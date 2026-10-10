@@ -93,7 +93,15 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: '0.16.0'
+      - run: scripts/build-herdr.sh prepare
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # The parent target directory also holds verified upstream source.
+          # Cache only compiler output; pruning source drops its patch stamp.
+          prefix-key: v1-native
+          workspaces: |
+            . -> target/${{ matrix.target }}
+            target/upstream/herdr -> target
       - name: Install musl compiler
         if: runner.os == 'Linux'
         env:
