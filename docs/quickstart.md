@@ -96,7 +96,10 @@ GitHub updates require access to the private release repository, using your own
 cargo install herdr-relay --locked --force
 ```
 
-The GitHub updater also upgrades the separately installed service executable.
+The GitHub updater also checks the separately installed service executable, even
+when the CLI is already current. After a crates.io upgrade without private GitHub
+access, reinstall the service with `service stop`, `service install --start-at-login`,
+and `service start` (omit the login flag if you want autostart disabled).
 An active session defers its activation; stop/start the service when convenient,
 or use `herdr-relay update --restart-service` to allow an immediate disconnect.
 Updating Relay does not update Herdr, Codex, or Claude Code.
