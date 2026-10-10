@@ -72,6 +72,8 @@ type Channel = {
 
 export class DeviceRelay extends DurableObject<Env> {
   private readonly instance = randomHex();
+  /** Channel expiries read from SQL; only ever raised by renewal, dropped on end. */
+  private readonly expiries = new Map<string, number>();
   private readonly constructedAt = Date.now();
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -659,25 +661,25 @@ export class DeviceRelay extends DurableObject<Env> {
       const host = this.control()?.deserializeAttachment() as Control | undefined;
       if (this.env.ADMISSION_ENABLED !== 'true' || !host || host.expires <= Date.now())
         throw new ProtocolError('RELAY_BUSY', 503);
-      const row = this.ctx.storage.sql
-        .exec<Channel>(
-          'SELECT * FROM channels WHERE id=? AND reservation=?',
-          state.channel,
-          state.reservation,
-        )
-        .toArray()[0];
-      if (typeof message === 'string' || !state.ready || !row || row.expires <= Date.now())
+      if (
+        typeof message === 'string' ||
+        !state.ready ||
+        this.channelExpiry(state.channel, state.reservation) <= Date.now()
+      )
         throw new ProtocolError();
       const frame = decodeFrame(message);
       state.messages = Math.min(state.messages + 1, Number.MAX_SAFE_INTEGER);
       if (frame.channel !== state.channel || (state.purpose !== 'attach' && state.messages > 256))
         throw new ProtocolError();
-      const peers = this.channelSockets(state.channel, state.reservation).filter(
-        (peer) => peer !== ws,
-      );
+      // Deserialize each peer attachment once per message.
+      const peers: [WebSocket, Pair][] = [];
+      for (const candidate of this.ctx.getWebSockets('channel:' + state.channel)) {
+        if (candidate === ws || candidate.readyState !== WebSocket.OPEN) continue;
+        const attachment = candidate.deserializeAttachment() as Pair;
+        if (attachment.reservation === state.reservation) peers.push([candidate, attachment]);
+      }
       if (peers.length !== 1) throw new ProtocolError();
-      const peer = peers[0],
-        other = peer.deserializeAttachment() as Pair;
+      const [peer, other] = peers[0];
       if (other.boot !== state.boot || other.role === state.role || !other.ready)
         throw new ProtocolError();
       if (!state.flow || !other.flow) throw new ProtocolError('PROTOCOL_CHANGED', 409);
@@ -740,7 +742,25 @@ export class DeviceRelay extends DurableObject<Env> {
     for (const row of rows) this.endChannel(row.id, row.reservation, 'HOST_OFFLINE');
     this.ctx.waitUntil(this.arm());
   }
+  /** The current channel expiry; SQL is read only when the cached value has passed. */
+  private channelExpiry(channel: string, reservation: string): number {
+    const key = channel + ':' + reservation;
+    const cached = this.expiries.get(key);
+    if (cached !== undefined && cached > Date.now()) return cached;
+    const row = this.ctx.storage.sql
+      .exec<{
+        expires: number;
+      }>('SELECT expires FROM channels WHERE id=? AND reservation=?', channel, reservation)
+      .toArray()[0];
+    if (!row) {
+      this.expiries.delete(key);
+      return 0;
+    }
+    this.expiries.set(key, row.expires);
+    return row.expires;
+  }
   private endChannel(channel: string, reservation: string, reason: string): void {
+    this.expiries.delete(channel + ':' + reservation);
     const sockets = this.channelSockets(channel, reservation);
     const peak = Math.max(
       0,
