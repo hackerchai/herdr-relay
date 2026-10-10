@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/hackerchai/herdr-relay/compare/v0.2.3...v0.2.4) (2026-10-10)
+
+
+### Features
+
+* direct LAN/tailnet path, lower attach latency and higher relay capacity ([#48](https://github.com/hackerchai/herdr-relay/issues/48)) ([b0039f1](https://github.com/hackerchai/herdr-relay/commit/b0039f165756555ce042d3d95e6160d8f8fede88))
+
 ## [0.2.3](https://github.com/hackerchai/herdr-relay/compare/v0.2.2...v0.2.3) (2026-10-10)
 
 
