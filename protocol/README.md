@@ -1,124 +1,233 @@
-# Relay 协议 v1 草案
+# Relay protocol v1 design draft
 
-日期：2026-10-09。状态：**用于实现原型的设计草案，尚未冻结 wire compatibility**。产品约束来自 [GitHub Issues](https://github.com/hackerchai/herdr-relay/issues)，端点认证方案见 [device identity and TLS](../README.md#device-identity-and-local-encrypted-diagnostic)。签名消息编码、证书 profile 和跨语言样例必须在 P1 完成后才能发布协议 v1。
+Original draft: 2026-10-09. This document records the proposed protocol and its
+invariants; it does not declare frozen wire compatibility. For implemented
+admission messages and routing, see [access-v1.md](access-v1.md). Shared signature
+and frame examples are in [fixtures/](fixtures/). Product requirements are tracked
+in [GitHub Issues](https://github.com/hackerchai/herdr-relay/issues).
 
-## 三层边界
+## Protocol layers
 
-| 层 | 解析者 | 内容 |
-|---|---|---|
-| 外层 WSS / Relay 控制 | Rust、Worker、DO | 设备接入证明、路由、角色、代次、窗口和错误；WSS 验证 Relay 域名 |
-| 内层 TLS 1.3 / 端点控制 | 两个 Rust 端点 | 设备公钥认证、配对秘密、共享名称与列表、目标校验、attach 准备状态 |
-| Herdr 原生字节流 | Herdr client / server | native 协议原样传送；Worker/DO 不解密，Rust 数据泵不重编 Herdr frame |
+| Layer | Interpreted by | Contents |
+| --- | --- | --- |
+| Outer WSS and Relay control | Rust endpoints, Worker and Durable Objects | Device admission proofs, routing, roles, generations, windows and errors; WSS validates the Relay hostname |
+| Inner TLS 1.3 and endpoint control | The two Rust endpoints | Device public-key authentication, pairing secrets, shared names and listings, target checks and attach preparation |
+| Native Herdr byte stream | Herdr client and server | Unmodified native protocol; Worker/DO cannot decrypt it and the Rust data pump does not re-encode Herdr frames |
 
-Relay 可以知道设备间的路由关系、opaque 目标 ID、连接时间、消息尺寸及流量。终端内容、配对兑换秘密、用户为目标取的名称和 session 路径只在端点保存或内层传送。
+The Relay can observe routing relationships between devices, opaque target IDs,
+connection times, message sizes and traffic volume. Terminal contents, pairing
+redemption secrets, user-assigned target names and session paths remain at the
+endpoints or travel inside the encrypted endpoint channel.
 
-## 身份和生命周期字段
+## Identity and lifecycle fields
 
-| 字段 | 含义与约束 |
-|---|---|
-| `device_id` | 身份公钥指纹；不能只凭显示名称认证 |
-| `target_id` | 发布方创建的随机稳定 ID，映射到明确保存的逻辑 session；不接受任意远程路径 |
-| `boot_id` | 发布方 daemon 每次启动产生的随机代次；旧 daemon 的 ticket 不得接入新 daemon |
-| `runtime_id` | 发布方观察到目标重新接入/替换时产生的运行代次；不使用 PID 单独作为身份 |
-| `channel_id` | 每次连接生成的 128 bit 随机 ID；正常访问、配对控制都使用新 ID |
-| `grant_version` | 发布方本地每条方向授权的持久化单调版本；撤销和重新授权不能重用旧版本 |
-| `purpose` | `pair`、`control`、`attach` 三选一；配对通道不能升级成操作通道 |
-| `role` | 相对于目标的 `publisher` 或 `connector`；与设备本身类别无关 |
+| Field | Meaning and constraints |
+| --- | --- |
+| `device_id` | Identity public-key fingerprint; a display name is not authentication |
+| `target_id` | Random stable publisher-assigned ID mapped to an explicitly saved logical session; arbitrary remote paths are rejected |
+| `boot_id` | Random generation for each publisher daemon start; old daemon tickets cannot enter a new daemon |
+| `runtime_id` | Runtime generation observed when a target reconnects or is replaced; a PID alone is not an identity |
+| `channel_id` | Random 128-bit ID generated for every connection, including pairing and control |
+| `grant_version` | Persisted, monotonically increasing version of each directional grant; revocation and reauthorization cannot reuse an old version |
+| `purpose` | One of `pair`, `control` or `attach`; a pairing channel cannot become an operation channel |
+| `role` | `publisher` or `connector` relative to the target, independent of the device's other roles |
 
-同一设备可为不同目标打开多个 `channel_id`，同一实例同时只允许一个 attach 占用（含待建立和活动状态）。另一个 attach 即使来自同一设备且使用新 ID，也返回 `TARGET_BUSY`；不会替换正常通道。一个 ID 的任一角色被占用后，再接入应报 `CHANNEL_CONFLICT`，不得踢掉旧连接。网络恢复也不重用旧 ID。
+A device can open different channels for different targets. Each instance permits
+only one pending or active attach. Another attach returns `TARGET_BUSY`, even
+from the same device with a new channel ID; it never replaces a healthy channel.
+Reusing an occupied role for a channel returns `CHANNEL_CONFLICT` without evicting
+the existing connection. Recovery also uses new channel IDs.
 
-## 云端准入与通道开通
+## Cloud admission and channel setup
 
-1. 设备向 Relay 申请短期挑战，使用身份私钥签名，证明公钥持有。签名必须绑定 Relay origin、协议版本、操作、随机 nonce、有效期和必要请求字段；挑战只能消费一次。接入 token 有期限和设备作用域，不构成 Herdr 授权。
-2. 发布方在其 Device DO 上建立控制 WSS，注册 boot ID、opaque 共享目标和授权镜像。共享名称由内层控制通道提供；云端镜像不能替代发布方本地授权。
-3. 连接方通过 Device DO 请求配对或已授权控制通道。配对需有效的未过期邀请路由 ID，仍受速率与未认证连接上限约束；兑换秘密只在内层提交。普通控制请求检查方向授权镜像，发布方再次校验。
-4. 连接方经内层控制通道请求目标 attach。发布方核对授权、目标启用状态和已知运行状态后，由主机与 Room DO 分别原子预留该实例的唯一 attach 占用，并在 Device DO 预留设备总连接额度；部分成功须补偿，不得因跨 DO 操作超售。重复目标配置与别名须归一化或拒绝，不能为同一实际实例建立多个独占槽位。
-5. Relay 为两个角色分别发放一次性短期 ticket，绑定 origin、双方设备、目的、目标、boot/runtime/grant 代次、channel ID、角色、reservation ID 和截止时间。兑换还必须与当前设备接入证明匹配，不能仅凭 ticket 充当另一端。
-6. 两端分别主动建立入站 WSS，Room DO 消费各自 ticket。只有两端到齐才发送 `ROUTE_READY`；未到齐不排队 Herdr 数据。预留失败、超时和关闭按预留 ID、channel ID 与运行代次幂等释放；先确认旧数据通道停止或使其代次失效，再释放独占占用和额度。迟到清理不得释放后续连接；跨 DO 中途失败不得泄漏或超售配额。休眠恢复必须保留唯一占用，不能仅凭租约到期假设旧连接已停止。
-7. 两端建立内层 TLS，比较加密上下文，然后按下节完成 native attach。所有安全检查通过前不向本地 Herdr 写入任何字节。
+1. A device requests a short-lived challenge and signs it with its identity key.
+   The signature binds the Relay origin, protocol version, operation, random
+   nonce, expiry and required request fields. A challenge can be consumed once.
+   Admission credentials expire and are device-scoped; they do not authorize
+   Herdr access.
+2. The publisher opens a control WSS to its Device DO and registers its boot ID,
+   opaque shared targets and mirrored grants. Shared names travel through inner
+   control messages. Cloud mirrors never replace the publisher's local grants.
+3. The connector requests a pairing or authorized control channel through the
+   Device DO. Pairing requires a valid, unexpired invitation route ID and remains
+   subject to rate and unauthenticated-connection limits. The redemption secret
+   travels only inside TLS. Ordinary control requests check mirrored directional
+   grants, which the publisher checks again.
+4. The connector requests target attachment through inner control. The publisher
+   checks the grant, target enabled state and known runtime. The host and Room DO
+   each atomically reserve that instance's exclusive attach slot, while the
+   Device DO reserves device-wide capacity. Partial success requires rollback;
+   cross-DO operations must not oversubscribe capacity. Normalize or reject
+   duplicate session definitions and aliases so they cannot create extra slots
+   for the same instance.
+5. The Relay issues separate single-use, short-lived tickets for the two roles.
+   Tickets bind the origin, both devices, purpose, target, boot/runtime/grant
+   generations, channel ID, role, reservation ID and deadline. Redemption must
+   also match the current device's admission proof; a ticket alone cannot
+   impersonate the other endpoint.
+6. Both endpoints actively open WSS connections to the Relay, and the Room DO
+   consumes their tickets. It sends `ROUTE_READY` only after both roles arrive;
+   it queues no Herdr data while waiting. Reservation failure, timeout and close
+   release resources idempotently by reservation ID, channel ID and generation.
+   Stop or invalidate the old data channel before releasing its slot and quota.
+   Late cleanup cannot release a newer connection, and partial cross-DO failures
+   cannot leak or oversubscribe reservations. Hibernation recovery must preserve
+   exclusivity; lease expiry alone does not prove an old connection has stopped.
+7. The endpoints establish inner TLS, compare their encrypted channel contexts,
+   and perform native attachment as described below. No bytes reach the local
+   Herdr socket before all required checks pass.
 
-云端处理步骤是提案；挑战/ticket 的规范编码、签名 domain separator、过期边界、跨 DO 预留补偿必须有确定性样例与故障测试后冻结。不能用对任意 JSON 字符串签名代替规范定义。
+This setup sequence is a design proposal. Canonical challenge/ticket encoding,
+signature domain separation, expiry boundaries and reservation rollback require
+deterministic fixtures and failure tests before freezing the protocol. Signing
+arbitrary JSON strings is not a substitute for a canonical encoding.
 
-发布方常驻控制 WSS 仅用于在线注册和开通通知。`pair` / `control` 的端点 TLS 各自使用新的双端 WSS，由 Device DO 配对路由，遵循同样的一次性角色 ticket、窗口和生命周期规则；不在常驻控制流内混入 native 字节。它们使用独立的短期控制通道额度，不占用某个 Herdr 目标，因此 Herdr 离线仍可配对。普通 `control` 完成目标查询或开通后及时关闭，空闲超时不自动重放请求。
+The publisher's persistent control WSS carries only online registration and
+channel notifications. Each `pair` or `control` exchange uses a fresh pair of WSS
+connections routed by the Device DO, with the same ticket, window and lifecycle
+rules. Native bytes never enter the persistent control stream. These short-lived
+channels use separate capacity and do not occupy a Herdr target, so pairing can
+succeed while Herdr is offline. Ordinary control channels close after listing or
+setup; an idle timeout does not trigger automatic request replay.
 
-## native attach 与字节流切换
+## Native attachment and stream transition
 
-内层控制消息使用 `u32` 大端长度加 UTF-8 JSON，单条至多 8 KiB。schema 必须拒绝重复键、非法字段类型和当前状态不允许的消息。`purpose=attach` 的流程为：
+Inner control messages use a big-endian `u32` length followed by UTF-8 JSON, with
+at most 8 KiB per message. The schema must reject duplicate keys, invalid field
+types and messages disallowed in the current state. An attach channel follows
+this sequence:
 
 ```mermaid
 sequenceDiagram
-    participant C as 连接方 Rust
-    participant H as 发布方 Rust
+    participant C as Rust connector
+    participant H as Rust publisher
     participant S as Herdr server
-    participant N as 本地 Herdr client
-    C->>H: 内层 TLS 与 BIND 上下文
-    H->>C: BOUND / 兼容版本与当前运行代次
-    C->>C: 创建本地 listener，准备监督 client
+    participant N as Local Herdr client
+    C->>H: Inner TLS and BIND context
+    H->>C: BOUND / compatible version and runtime generation
+    C->>C: Create local listener and prepare client supervision
     C->>H: ATTACH_PREPARED
-    H->>H: 再查最新授权与 enabled 状态
-    H->>S: 连接目标 client socket
+    H->>H: Recheck current grant and enabled state
+    H->>S: Connect to target client socket
     H->>C: ATTACH_READY
     C->>H: STREAM_START
-    C->>N: 启动 herdr client，绑定本地 listener
-    N->>C: native hello
-    C->>H: 原样加密转送 native bytes
-    H->>S: native hello，后续持续双向透传
+    C->>N: Start herdr client using the local listener
+    N->>C: Native hello
+    C->>H: Encrypt and forward unchanged native bytes
+    H->>S: Native hello, then bidirectional byte forwarding
 ```
 
-`STREAM_START` 后同一内层连接只承载原生字节，不再插入 JSON、错误文本或重连消息。实现必须保留同一次 TLS read 中控制消息后已经到达的字节，不能因切换解析器而丢包。后续结束通过关闭通道报告。
+After `STREAM_START`, the inner connection carries only native bytes. It must not
+insert JSON, error text or reconnect messages. Preserve bytes following a control
+message in the same TLS read when switching parsers. Subsequent failure closes
+the channel.
 
-Herdr 的本地 hello 必须在其 4 秒限制内完成；网络和 TLS 提前建立只能减少风险，仍须实测启动时间和网络 RTT。超时丢弃整个通道，不能继续旧握手。控制用 `purpose=control` 通道不切换成 native 流。
+Herdr's local hello must finish within its four-second limit. Establishing the
+network and TLS first reduces risk but does not replace measuring startup time
+and RTT. A timeout discards the entire channel; it cannot resume the old handshake.
+A `purpose=control` channel never switches to the native stream.
 
-## 外层数据帧
+## Outer data frames
 
-每条二进制 WebSocket 消息只含一个 Relay frame。默认密文块不超过 **16 KiB**；TLS record 和 Herdr frame 都可以跨多个块，Relay 不等待完整上层 frame。外层固定头为 32 byte，整数均大端：
+Each binary WebSocket message contains exactly one Relay frame. A ciphertext
+chunk is at most **16 KiB** by default. TLS records and Herdr frames may span
+chunks; the Relay does not wait for a complete higher-level frame. The fixed
+header is 32 bytes, with all integers encoded in big-endian order:
 
-| 字节偏移 | 字段 | 大小 |
-|---|---|---|
-| 0 | 协议 major，草案值 `1` | 1 |
-| 1 | kind：`1=DATA`，`2=CREDIT` | 1 |
-| 2 | flags，首版必须为零 | 2 |
-| 4 | channel ID 原始字节 | 16 |
-| 20 | offset，方向内累计密文字节数 | 8 |
-| 28 | payload length | 4 |
-| 32 | DATA 密文；CREDIT 为空 | 0–16384 |
+| Byte offset | Field | Size in bytes |
+| --- | --- | --- |
+| 0 | Protocol major version; draft value `1` | 1 |
+| 1 | Kind: `1=DATA`, `2=CREDIT` | 1 |
+| 2 | Flags; must be zero in the first version | 2 |
+| 4 | Raw channel ID | 16 |
+| 20 | Cumulative ciphertext offset for this direction | 8 |
+| 28 | Payload length | 4 |
+| 32 | DATA ciphertext; empty for CREDIT | 0–16384 |
 
-DATA 的 offset 必须恰好等于该方向下一预期位置；长度必须与实际 payload 相符。CREDIT 的 offset 表示对向流已接收并释放缓冲预算的位置，只能单调增加、不能超过已发送位置；它不代表 Herdr 已执行输入。JSON 中如需表示 64 bit 计数，使用十进制字符串，避免 JavaScript Number 精度丢失。
+A DATA offset must equal the next expected position in that direction, and its
+length must match the payload. A CREDIT offset acknowledges the opposite stream's
+received bytes whose buffer budget has been released. Credit is monotonic and
+cannot exceed bytes sent; it does not acknowledge execution by Herdr. Represent
+64-bit counters in JSON as decimal strings to avoid JavaScript Number precision
+loss.
 
-未知 major、kind、非零 flags、越界长度、错 channel、重复/跳跃 offset 或伪造 CREDIT 均关闭该通道。不要尝试重排或重放。首版不支持半关闭：一端结束意味着整个通道结束。
+Unknown major versions or kinds, nonzero flags, invalid lengths, wrong channels,
+duplicate/skipped offsets or forged credit close the channel. Do not reorder or
+replay frames. The first version does not support half-close: either endpoint
+ending the stream ends the entire channel.
 
-## 有界流控与休眠恢复
+## Bounded flow control and hibernation recovery
 
-- 每方向初始窗口建议 256 KiB；始终满足 `sent - consumed <= window`。握手阶段同样计入窗口，并额外限制握手总量与时间。
-- 接收端只有在密文已被 TLS 处理、对应明文已交给下游或占用明确的有界缓冲后才能前移 CREDIT。窗口不能仅因为调用了 WebSocket `send()` 就恢复。
-- CREDIT 不受 DATA 窗口阻塞，避免双方等窗口死锁；合并发送并单独限频。对足够小的低速流也应及时回 credit，不能一直等待固定批量阈值。
-- Rust 同时限制读入、TLS、明文、待发送以及 daemon 总缓冲；耗尽预算即暂停上游读取。持续无法取得进展时关闭慢通道。目标进程中的 Herdr 队列另需验证，见[Herdr compatibility patch](../patches/herdr/README.md)。
-- Room DO 不保留应用数据队列：已配对则检查窗口并转发，未配对则拒绝。接收端信用、帧尺寸、消息速率与连接配额共同限制平台发送缓冲的压力；真实平台队列仍需压测。
-- 使用 `acceptWebSocket`，由 attachment 保存绑定身份、角色、channel ID、代次、offset、窗口和限速状态；发送前先记账。休眠唤醒后从连接重建路由，缺失/冲突时保守关闭，不重放数据。
-- 票据消费、预留和撤销版本需要可持久恢复；不能只放 attachment，因为连接关闭会失去 attachment。恢复出来的额度不应凭内存归零。
-- 心跳由 Rust 端发原生 WebSocket ping；DO 不为每条连接设循环定时器或发起出站 WebSocket。休眠只保证可恢复状态，不能替代断网重连。
+- The proposed initial window is 256 KiB per direction. Always enforce
+  `sent - consumed <= window`. Handshake traffic also consumes window capacity
+  and has separate total-size and time limits.
+- Advance CREDIT only after TLS has processed the ciphertext and the plaintext
+  has reached the downstream consumer or a separately bounded buffer. Calling
+  WebSocket `send()` does not replenish credit.
+- CREDIT is independent of the DATA window to prevent deadlock. Coalesce it and
+  rate-limit it separately, but return credit promptly for small, slow streams
+  instead of waiting indefinitely for a batch threshold.
+- Rust bounds incoming, TLS, plaintext, outgoing and total daemon buffering.
+  Exhausting a budget pauses upstream reads; persistent lack of progress closes
+  the slow channel. Herdr's own queue needs a separate bound; see the
+  [Herdr compatibility patch](../patches/herdr/README.md).
+- A Room DO keeps no application data queue. It validates credit and forwards
+  data for a paired channel, otherwise it rejects the data. Credit, frame sizes,
+  message rates and connection quotas together limit pressure on platform
+  buffering; actual platform queues still require load measurements.
+- Use `acceptWebSocket` and socket attachments to retain bound identities, roles,
+  channel IDs, generations, offsets, windows and rate state. Account for data
+  before forwarding it. Reconstruct routes after waking; missing or conflicting
+  state closes the channel without replay.
+- Ticket consumption, reservations and revocation versions must survive recovery.
+  Attachments alone are insufficient because closing a socket removes them.
+  Recovery must not reset quotas merely because process memory was cleared.
+- Rust endpoints send native WebSocket pings. DOs do not create per-connection
+  timer loops or outgoing WebSockets. Hibernation provides recoverable state,
+  not network reconnection.
 
-Cloudflare 官方说明入站 Hibernation WebSocket 可保留连接，但重置内存；原生 ping 可自动应答。设计因此区分连接 attachment 与持久授权/额度状态。[平台说明](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
+Cloudflare's [WebSocket documentation](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
+explains that incoming hibernating sockets can survive an in-memory reset and
+native ping frames can receive automatic responses. Socket attachments and
+persistent authorization/quota state therefore have distinct roles.
 
-## 失败与重试
+## Failure and retry behavior
 
-控制阶段使用结构化错误 `{code, retryable, retry_after_ms?}`，长度受控制消息上限约束；数据阶段发送外层关闭原因并结束 native socket，不能将错误文本写入 Herdr 流。
+Control failures use structured `{code, retryable, retry_after_ms?}` messages
+within the control-size limit. Data failures send an outer close reason and close
+the native socket; error text must never enter the Herdr stream.
 
-| code | 客户端行为 |
-|---|---|
-| `HOST_OFFLINE` / `TARGET_OFFLINE` / `NETWORK_LOST` | 显示状态，自动退避重连，可取消 |
-| `RELAY_BUSY` / `RATE_LIMITED` | 按有上限的服务端建议退避，不能紧循环 |
-| `NOT_AUTHORIZED` / `REVOKED` / `SHARE_DISABLED` | 结束当前连接，需用户修正授权或共享状态 |
-| `IDENTITY_MISMATCH` / `PROTOCOL_ERROR` / `INCOMPATIBLE_HERDR` | 明确失败，不降级；自动重试不能绕过错误 |
-| `PAIR_INVALID` / `PAIR_EXPIRED` / `PAIR_USED` | 不建立新授权；仅符合规则的幂等重试可取回原结果 |
-| `TARGET_BUSY` | 新连接显示“实例已被占用”并结束，不抢占或排队；自动重连仅可有限等待自身旧通道清理，发现其他占用即结束 |
-| `QUOTA_EXCEEDED` / `CHANNEL_CONFLICT` | 说明作用域，不接管已有连接 |
-| `SLOW_CONSUMER` | 关闭该连接，提示原因；若自动重试需退避并限制连续失败 |
+| Code | Connector behavior |
+| --- | --- |
+| `HOST_OFFLINE` / `TARGET_OFFLINE` / `NETWORK_LOST` | Show status and reconnect with cancellable backoff |
+| `RELAY_BUSY` / `RATE_LIMITED` | Honor a bounded server-suggested delay; never busy-loop |
+| `NOT_AUTHORIZED` / `REVOKED` / `SHARE_DISABLED` | End the connection; the user must correct authorization or sharing state |
+| `IDENTITY_MISMATCH` / `PROTOCOL_ERROR` / `INCOMPATIBLE_HERDR` | Fail explicitly without downgrade; retry cannot bypass the error |
+| `PAIR_INVALID` / `PAIR_EXPIRED` / `PAIR_USED` | Create no new grant; only a permitted idempotent retry may retrieve the original result |
+| `TARGET_BUSY` | Report the occupied instance and exit without preemption or queuing; recovery may wait briefly for its own old channel to close, but stops when another client occupies the slot |
+| `QUOTA_EXCEEDED` / `CHANNEL_CONFLICT` | Explain the affected scope without taking over an existing connection |
+| `SLOW_CONSUMER` | Close the channel and explain why; automatic retry needs backoff and a consecutive-failure limit |
 
-重连一律重新校验授权、建立 TLS 和 native client，offset 从零开始；不会恢复旧窗口、旧输入队列或输入执行回执。未知结果的按键不自动重放。用户主动退出或取消时停止重试。
+Every reconnect revalidates authorization and creates new TLS and native-client
+connections with offsets starting at zero. It restores no previous window, input
+queue or execution receipt. Never automatically replay keystrokes with unknown
+outcomes. Explicit user exit or cancellation stops retrying.
 
-## 冻结协议前的样例和测试
+## Fixtures and validation before freezing the protocol
 
-Rust 与 TypeScript 必须共享有效和无效 frame fixtures，覆盖空载荷、16384-byte 边界、超过 JS 安全整数的 offset、计数溢出、重复/跳跃、错代次、断半包、畸形控制消息与 CREDIT 超前；只有 DATA/CREDIT 外壳由两端共同解释。
+Rust and TypeScript must share valid and invalid frame fixtures covering empty
+payloads, the 16384-byte boundary, offsets above JavaScript's safe-integer limit,
+counter overflow, duplicate/skipped offsets, wrong generations, truncated frames,
+malformed control messages and credit ahead of sent data. Both languages share
+interpretation only of the DATA/CREDIT envelope, not Herdr's native protocol.
 
-另需跨语言验证接入签名和 ticket 编码；执行两端串线、休眠恢复、同实例并发竞争仅一个成功、旧代次不能释放新占用、不同目标一慢一快、配额预留中途失败和撤销竞争测试。当前文件是规格草案，仓库尚无 Rust/TS 编解码实现或这些协议 fixtures。
+Admission signatures and ticket encoding also require cross-language validation.
+Exercise crossed endpoint connections, hibernation recovery, concurrent attach
+with exactly one winner, old-generation cleanup racing a newer reservation,
+independent slow and fast targets, partial quota-reservation failure, and
+revocation races.
+
+This remains a design draft. The repository now includes implemented Rust and
+TypeScript codecs and [shared fixtures](fixtures/); consult
+[access-v1.md](access-v1.md) and the source for the actual encoded messages and
+limits rather than treating every proposed detail here as the wire contract.

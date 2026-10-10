@@ -1,7 +1,7 @@
 # Herdr Relay: first connection
 
 Install Herdr and Herdr Relay on both computers. Herdr 0.9.3 is the supported
-native client. Public Relay installation requires Rust 1.99 or newer:
+native client. The source installation below requires Rust 1.99 or newer:
 
 ```sh
 curl -fsSL https://herdr.dev/install.sh | sh

@@ -6,7 +6,7 @@ implementation status and acceptance limits, use [README](README.md) and
 
 > 2026-10-09 需求访谈更新：**第一版交付可用 Rust CLI 与 TypeScript Cloudflare Worker/DO Relay，插件留到后续。** 默认公开免费、免注册并设资源配额，同时支持开源自建；两端支持 macOS（Apple Silicon、Intel）和 Linux（x86_64、arm64）。本轮确认与工程待决项见 [GitHub Issues](https://github.com/hackerchai/herdr-relay/issues)，以其中已确认的要求为准。
 
-> 2026-10-10 修正：设备通过同一 CLI 既可发布也可连接；一台设备可同时发布多个实例，连接时选择设备和实例；每个实例同时最多一个活动 Relay 客户端。后来的连接返回 TARGET_BUSY，不抢占；多台设备可获授权并先后使用，不同实例可并行。见 [exclusive target access](README.md#persistent-shared-targets)。
+> 2026-10-10 修正：设备通过同一 CLI 既可发布也可连接；一台设备可同时发布多个实例，连接时选择设备和实例；每个实例同时最多一个活动 Relay 客户端。后来的连接返回 TARGET_BUSY，不抢占；多台设备可获授权并先后使用，不同实例可并行。见 [exclusive target access](protocol/access-v1.md#authorized-targets-and-native-channels)。
 
 > 授权范围已更新：按设备授权访问发布方当前与以后新增的所有已共享实例；两个方向分别授权。未共享实例仍不可访问，撤销设备应结束它对本机所有共享实例的连接。
 
@@ -16,7 +16,7 @@ implementation status and acceptance limits, use [README](README.md) and
 
 更新日期：2026-10-10。状态：核心产品范围和语言选型已确认；已有 Rust/TypeScript 实现、受控 Cloudflare 部署及四平台候选包。完整 GUI、全链路资源及公开发布验收仍未完成，当前证据见[release readiness](docs/release-readiness.md)。
 
-后续证据与实现见[native compatibility probe](README.md#isolated-upstream-compatibility-probe)、[manual acceptance checklist](docs/manual-acceptance.md)、[协议](protocol/README.md)。下面保留总体设计及历史候选方案；实际 CLI 和工程默认值以实施方案、README 与候选记录为准，不能将历史建议视为当前实现或发布承诺。
+后续证据与实现见[native compatibility probe](scripts/probe-herdr-0.9.3.py)、[manual acceptance checklist](docs/manual-acceptance.md)、[协议](protocol/README.md)。下面保留总体设计及历史候选方案；实际 CLI 和工程默认值以实施方案、README 与候选记录为准，不能将历史建议视为当前实现或发布承诺。
 
 ## 已确认的方向
 
@@ -68,7 +68,7 @@ TypeScript 用于云端，减少 Workers 平台接口与构建工具之间的适
 
 首版支持每台设备同时发布多个 Herdr 实例，客户端选择设备和实例连接；每个实例可授权多台设备，但同时只接受一个活动 Relay 客户端。同一 Rust CLI 可承担发布或连接角色。DO 按逻辑共享目标的稳定标识组织房间，不依赖某次 Herdr 进程的生命周期；同一实例只允许一个待建立或活动的 attach 占用，主机与 Room DO 都执行独占检查；单次连接使用独立 ID 与代次，后来的连接报忙，重连不能替换有效连接。只有旧通道停止且旧代次失效后才释放占用；重复 session 配置或别名不能绕过限制。不同共享目标分别管理，停止一个实例的共享不影响其他目标。房间标识不承担身份认证。主机离线时明确返回离线，不缓存待执行的键盘输入。
 
-本机探针已验证两个独立 native protocol 端点的接入、输入、surface 更新和断开隔离。每次远程 attach 因而采用独立的主机 client socket 与加密通道；同一 tab 的 PTY 尺寸沿用 Herdr 活动/焦点规则，不承诺每客户端独立尺寸。这些上游能力不改变产品的独占要求；多目标并行和竞争报忙已有候选记录，实际 GUI 与完整故障组合仍需补全，见 [native-client bridge](README.md#local-native-client-bridge) 与 [exclusive target access](README.md#persistent-shared-targets)。
+本机探针已验证两个独立 native protocol 端点的接入、输入、surface 更新和断开隔离。每次远程 attach 因而采用独立的主机 client socket 与加密通道；同一 tab 的 PTY 尺寸沿用 Herdr 活动/焦点规则，不承诺每客户端独立尺寸。这些上游能力不改变产品的独占要求；多目标并行和竞争报忙已有候选记录，实际 GUI 与完整故障组合仍需补全，见 [native-client bridge](protocol/README.md#native-attachment-and-stream-transition) 与 [exclusive target access](protocol/access-v1.md#authorized-targets-and-native-channels)。
 
 ## Herdr 适配与生命周期
 
@@ -88,9 +88,9 @@ TS DO 使用接受入站 WebSocket 的 Hibernation API；连接身份、角色�
 
 ## 配对、加密与授权
 
-已确认的首版流程是发布方生成一次性配对串，另一端导入并完成身份验证与兑换后保存设备授权，无需发布方再次确认。兑换时发布方 Relay 后台服务须在线，Herdr 可以离线；发布方服务离线时不能宣告配对成功。该授权覆盖发布方当前与未来全部已共享实例，两个方向分别授予。配对串需要限制使用次数和有效期，并将兑换结果绑定到设备身份。Rust 端自动生成并保管私钥，用户无需手工维护 SSH 密钥。当前实现使用 rustls TLS 1.3、设备公钥固定与原子配对事务；验证证据和边界见 [device identity and TLS](README.md#device-identity-and-local-encrypted-diagnostic)。
+已确认的首版流程是发布方生成一次性配对串，另一端导入并完成身份验证与兑换后保存设备授权，无需发布方再次确认。兑换时发布方 Relay 后台服务须在线，Herdr 可以离线；发布方服务离线时不能宣告配对成功。该授权覆盖发布方当前与未来全部已共享实例，两个方向分别授予。配对串需要限制使用次数和有效期，并将兑换结果绑定到设备身份。Rust 端自动生成并保管私钥，用户无需手工维护 SSH 密钥。当前实现使用 rustls TLS 1.3、设备公钥固定与原子配对事务；验证证据和边界见 [device identity and TLS](protocol/README.md#protocol-layers)。
 
-Relay 接入凭据只决定能否进入云端连接路由；访问 Herdr 的授权由发布方验证。两层都要校验连接角色和有效期。A 撤销 B 时，关闭 B 对 A 全部共享目标的活动通道并拒绝后续接入，云端作废相应作用域内的凭据和连接；B 曾独立授予 A 的反向权限以及其他设备的连接保持有效。当前实现先本地持久化并关闭受影响通道，再同步云端，具体证据见[revocation behavior](README.md#revoke-a-paired-device)。不能把普通 token 配对等同于端到端身份验证。
+Relay 接入凭据只决定能否进入云端连接路由；访问 Herdr 的授权由发布方验证。两层都要校验连接角色和有效期。A 撤销 B 时，关闭 B 对 A 全部共享目标的活动通道并拒绝后续接入，云端作废相应作用域内的凭据和连接；B 曾独立授予 A 的反向权限以及其他设备的连接保持有效。当前实现先本地持久化并关闭受影响通道，再同步云端，具体证据见[revocation behavior](protocol/access-v1.md#recovery-and-cleanup)。不能把普通 token 配对等同于端到端身份验证。
 
 Worker/DO 不持有设备私钥或会话解密密钥。云端仍可见路由标识、连接时间和消息大小等元数据。首版设备授权提供发布方全部已共享实例的操作权限；只读、单 pane 和命令级权限需要 Herdr 或端点支持，不由密文 Relay 承诺。默认服务公开免费且有资源配额，工程准入、限流与配额已有实现及[operations guide](docs/operations.md)，生产设置仍待 #19；免费不意味着无限资源。
 
