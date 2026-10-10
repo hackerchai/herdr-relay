@@ -28,8 +28,9 @@ source is prepared separately; restoring a pruned parent `target` cache can
 otherwise recreate an incomplete source directory without its patch stamp.
 The cache prefix was changed after this was observed during the first release.
 
-After artifact construction succeeds, the workflow verifies the account remains
-on Workers Free and deploys the matching Worker through pinned Wrangler. A TLS
+After artifact construction succeeds, the workflow reports the account's Workers
+plan (Workers Paid; spending beyond its base is bounded by the production quotas)
+and deploys the matching Worker through pinned Wrangler. A TLS
 and protocol probe checks the production hostname. Every stage must pass;
 an incomplete run is not a successful release. All source-release archives and
 the readiness manifest are uploaded before the draft is published and GitHub
