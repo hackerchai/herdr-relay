@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.6](https://github.com/hackerchai/herdr-relay/compare/v0.2.5...v0.2.6) (2026-10-11)
+
+
+### Features
+
+* automatic update checks, host removal and computer names for hosts ([#55](https://github.com/hackerchai/herdr-relay/issues/55)) ([d41b1b5](https://github.com/hackerchai/herdr-relay/commit/d41b1b5b24191ffc17167430cc2ca686e141cc48))
+* update from an R2 download site with GitHub Releases fallback; retire the binary repository ([#53](https://github.com/hackerchai/herdr-relay/issues/53)) ([f36cc63](https://github.com/hackerchai/herdr-relay/commit/f36cc632288a1e30fef241240e10e02fc8a26eec))
+
 ## [0.2.5](https://github.com/hackerchai/herdr-relay/compare/v0.2.4...v0.2.5) (2026-10-11)
 
 
