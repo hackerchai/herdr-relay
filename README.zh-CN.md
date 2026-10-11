@@ -46,6 +46,7 @@ herdr-relay pair
 
 自建 Relay 的地址等设置可以用 `herdr-relay config set` 保存到 `config.toml`。
 自建 Relay 可能要求运营者提供的访问令牌：`herdr-relay config set token`。托管的 Relay 永远不需要令牌。
+全部配置项见[配置指南（英文）](docs/configuration.md)。
 
 ## 使用演示
 
@@ -61,6 +62,7 @@ herdr-relay pair
 
 - [首次连接：中文教程](docs/quickstart.zh-CN.md) · [English](docs/quickstart.md)
 - [安装与后台服务](docs/install.md)
+- [配置与 `config.toml`（英文）](docs/configuration.md)
 - [升级与自动启动](docs/quickstart.zh-CN.md#5-后台服务与升级)
 - [自行托管 Relay](docs/self-hosting.md)
 - [Relay 开发](relay/README.md) · [协议](protocol/README.md)

@@ -48,9 +48,21 @@ menu shows which path each host uses. Allow TCP port 47120 on the host's
 firewall to use it. On macOS, the app running `herdr-relay` may need Local
 Network permission.
 
-Save settings such as a self-hosted Relay's origin with `herdr-relay config set`
-(stored in `config.toml`). A self-hosted Relay may require an access token from
-its operator: `herdr-relay config set token`. The hosted Relay never does.
+## Configuration
+
+Herdr Relay needs no configuration. To change a default permanently, such as a
+self-hosted Relay's origin or the Herdr executable, save it in `config.toml`
+(`~/.config/herdr-relay/config.toml` by default):
+
+```sh
+herdr-relay config set origin https://relay.example.com
+herdr-relay config set token     # a self-hosted Relay's access token, entered hidden
+herdr-relay config show
+```
+
+Flags and environment variables still override the file. The hosted Relay never
+uses a token. See the [configuration guide](docs/configuration.md) for every
+setting.
 
 ## In action
 
@@ -66,6 +78,7 @@ Choose a shared session by name, then connect to its agent workspace.
 
 - [First connection: English](docs/quickstart.md) · [中文教程](docs/quickstart.zh-CN.md)
 - [Installation and background services](docs/install.md)
+- [Configuration and `config.toml`](docs/configuration.md)
 - [Updates and autostart](docs/quickstart.md#background-service-and-upgrades)
 - [Sleep protection and MacBook lid-close limits](docs/sleep-protection.md)
 - [Host your own Relay](docs/self-hosting.md)

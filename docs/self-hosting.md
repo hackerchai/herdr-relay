@@ -173,7 +173,7 @@ bound or the 30-second stalled-progress timeout.
 ### CLI configuration
 
 Settings come from flags, then environment variables, then `config.toml`, then
-built-in defaults:
+built-in defaults. The [configuration guide](configuration.md) describes each one:
 
 | Setting (`config set`) | Environment | Meaning |
 | --- | --- | --- |
