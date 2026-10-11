@@ -8,7 +8,7 @@
 两台电脑都安装 [Herdr 0.9.3](https://github.com/herdrdev/herdr/releases/tag/v0.9.3)
 和 Herdr Relay。
 
-从 [公开 Releases](https://github.com/hackerchai/herdr-relay-releases/releases/latest)
+从 [GitHub Releases](https://github.com/hackerchai/herdr-relay/releases/latest)（国内建议用[下载站](install.md#download-site)）
 下载对应系统和架构的压缩包，核对校验和、解压后运行 `./install.sh`。
 二进制安装不需要 Rust、Node 或 GitHub 登录；具体步骤见[安装指南](install.md)。
 

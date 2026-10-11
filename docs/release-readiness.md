@@ -2,15 +2,17 @@
 
 Updated 2026-10-11. The maintainer accepted GUI testing, chose MIT licensing,
 confirmed the source repository is public and authorized crates.io publishing.
-A separate [public binary repository](https://github.com/hackerchai/herdr-relay-releases)
-now provides anonymous updates. The production
+Since 0.2.6, anonymous updates come from the
+[download site](install.md#download-site) with the source repository's
+[GitHub Releases](https://github.com/hackerchai/herdr-relay/releases) as fallback;
+the former separate binary repository is retired. The production
 hostname is `herdr-relay.hackerchai.com`; the monthly project ceiling is USD 10.
 
 | Gate | Current state | Evidence / remaining work |
 | --- | --- | --- |
 | CLI, encrypted trust, native transport and user services | Implemented and exercised | [Manual acceptance procedure](manual-acceptance.md); dated run records are kept locally |
 | GUI terminal acceptance | Passed by maintainer confirmation | Direct instruction on 2026-10-10; no new GUI tool run claimed |
-| Four release platforms | Tagged native builds and executable checks passed | [0.2.1 binary assets](https://github.com/hackerchai/herdr-relay-releases/releases/tag/v0.2.1); interactive checks used macOS arm64 and OrbStack Ubuntu arm64, with Rosetta checks on macOS Intel binaries |
+| Four release platforms | Tagged native builds and executable checks passed | [0.2.1 binary assets](https://github.com/hackerchai/herdr-relay/releases/tag/v0.2.1); interactive checks used macOS arm64 and OrbStack Ubuntu arm64, with Rosetta checks on macOS Intel binaries |
 | Upstream reliable-control queue | Patch implemented; 32 transport tests pass | [Patch and build instructions](../patches/herdr/README.md); custom server required for this bound |
 | Rust/TypeScript and upstream checks | Release CI passed on Linux/macOS | [Successful release run](https://github.com/hackerchai/herdr-relay/actions/runs/38040201479); 50 Rust tests per OS, 7 TypeScript tests, 32 upstream regressions and 3 publication tests |
 | License and publication | MIT; public source repository, binaries and crate | Crate explicitly includes Worker source and patch materials |
@@ -18,7 +20,7 @@ hostname is `herdr-relay.hackerchai.com`; the monthly project ceiling is USD 10.
 | Budget | Workers Paid (USD 5 base) with application quotas bounding usage | CI reports the plan before deploying; production quotas cap requests, channels and daily channel time |
 | Retention | Existing defaults retained | 25-hour offline mirrors; [other TTLs](operations.md); no application payload logs |
 | Availability and service scope | Best effort; user services | No SLA, forced logout test or system service promise |
-| Public crate and release handoff | Published and verified | [Public 0.2.1 crate](https://crates.io/crates/herdr-relay/0.2.1) and [public binary assets and checksums](https://github.com/hackerchai/herdr-relay-releases/releases/tag/v0.2.1) |
+| Public crate and release handoff | Published and verified | [Public 0.2.1 crate](https://crates.io/crates/herdr-relay/0.2.1) and [public binary assets and checksums](https://github.com/hackerchai/herdr-relay/releases/tag/v0.2.1) |
 
 Cloudflare resources remain in the maintainer's existing account. The operator
 identity is held in a private local profile; only its public device ID is in

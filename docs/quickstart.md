@@ -9,7 +9,7 @@ cargo install herdr-relay --locked
 ```
 
 Ensure the installed executables are on PATH. Alternatively, download a native
-archive from the [public releases](https://github.com/hackerchai/herdr-relay-releases/releases/latest),
+archive from [GitHub Releases](https://github.com/hackerchai/herdr-relay/releases/latest) or the [download site](install.md#download-site),
 verify its checksum, extract it, and run `./install.sh`. Binary installation needs
 neither Rust nor Node. No GitHub account is required.
 
@@ -95,7 +95,7 @@ and keep it after logout with `herdr-relay service autostart boot`, which may ne
 system authorization. Relay does not create Herdr sessions on reboot; once the
 same Herdr session starts again, saved sharing resumes.
 
-Updates use the public binary repository without GitHub authentication.
+Updates come from the download site, falling back to GitHub Releases, without any login.
 Source installations can also update from crates.io:
 
 ```sh

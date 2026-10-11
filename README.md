@@ -14,8 +14,8 @@ Install [Herdr latest](https://github.com/herdrdev/herdr/releases/latest) on bot
 computers. Herdr Relay has been tested with Herdr 0.9.3.
 
 Get Herdr Relay from the
-[public binary releases](https://github.com/hackerchai/herdr-relay-releases/releases/latest)
-or install it with Rust 1.99 or newer:
+[GitHub Releases](https://github.com/hackerchai/herdr-relay/releases/latest) (or the faster
+[download site](docs/install.md#download-site)) or install it with Rust 1.99 or newer:
 
 ```sh
 cargo install herdr-relay --locked
