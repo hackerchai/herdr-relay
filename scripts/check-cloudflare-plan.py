@@ -35,3 +35,22 @@ relevant = [
     and item.get('state', '').lower() != 'cancelled'
 ]
 print('Workers plan:', ', '.join(name(item).strip() for item in relevant) or 'Free')
+
+
+# The public relay stays open to everyone: never deploy it with an access token.
+with open('wrangler.production.jsonc') as config:
+    if 'RELAY_ACCESS_TOKEN' in config.read():
+        raise SystemExit('The public relay must not configure RELAY_ACCESS_TOKEN; deployment stopped.')
+secrets = urllib.request.Request(
+    f'https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/herdr-relay/secrets',
+    headers={'Authorization': f'Bearer {token}'},
+)
+try:
+    with urllib.request.urlopen(secrets, timeout=30) as response:
+        names = [s.get('name') for s in json.load(response).get('result') or []]
+except Exception as error:  # Unreadable secrets cannot enable auth: the Worker ignores it here.
+    print('Could not list Worker secrets:', error)
+else:
+    if 'RELAY_ACCESS_TOKEN' in names:
+        raise SystemExit('Remove the RELAY_ACCESS_TOKEN secret from the public relay; deployment stopped.')
+    print('Public relay access: open')

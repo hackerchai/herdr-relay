@@ -1,3 +1,5 @@
+/** The public hosted relay stays open to everyone, whatever its configuration. */
+export const PUBLIC_ORIGIN = 'https://herdr-relay.hackerchai.com';
 export class ProtocolError extends Error {
   code: string;
   status: number;
@@ -225,6 +227,8 @@ export function failure(error: unknown): Response {
   if (known && error.status === 429) headers['Retry-After'] = '60';
   if (known && error.status === 503) headers['Retry-After'] = '5';
   if (known && error.retryAfter) headers['Retry-After'] = String(error.retryAfter);
+  if (known && error.code.startsWith('RELAY_AUTH_'))
+    headers['WWW-Authenticate'] = 'Bearer realm="herdr-relay"';
   return Response.json(
     { code: known ? error.code : 'INTERNAL_ERROR' },
     { status: known ? error.status : 500, headers },

@@ -6,6 +6,7 @@ import { Admission, ADMISSION_OBJECT, admitted } from './admission.ts';
 import { globalQuotas, type AdmissionEnv } from './admission-ledger.ts';
 import {
   type Proof,
+  PUBLIC_ORIGIN,
   ProtocolError,
   boundedBody,
   bytes,
@@ -30,11 +31,22 @@ export interface Env extends AdmissionEnv {
   MAX_DEVICE_SHORT?: string;
   MAX_PENDING_CHANNELS?: string;
   CHANNEL_BYTES_PER_SECOND?: string;
+  /** Optional shared secret a self-hosted relay requires as `Authorization: Bearer`. */
+  RELAY_ACCESS_TOKEN?: string;
   AUTH: DurableObjectNamespace<AccessGate>;
   DEVICES: DurableObjectNamespace<DeviceRelay>;
   ROOMS: DurableObjectNamespace<Room>;
   ADMISSION: DurableObjectNamespace<Admission>;
 }
+/**
+ * When this isolate last learned the monthly budget is spent, it refuses
+ * requests itself until then, so a stopped relay costs no Durable Object calls.
+ */
+let stoppedUntil = 0;
+/** When the budget refusal told clients to come back. */
+let resumeAt = 0;
+const BUDGET_RECHECK_MS = 60000;
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === 'GET' && new URL(request.url).pathname === '/pair') {
@@ -51,7 +63,9 @@ export default {
       );
     }
     let lease: string | undefined,
-      status = 200;
+      status = 200,
+      // Durable Object calls besides begin/finish, reported for the monthly budget.
+      calls = 0;
     try {
       if (
         !originValid(env.RELAY_ORIGIN) ||
@@ -74,6 +88,8 @@ export default {
         !env.OPERATOR_DEVICE_IDS.split(',').every((id) => isHex(id, 64))
       )
         throw new ProtocolError('RELAY_UNCONFIGURED', 503);
+      // Checked before admission so an unauthorized caller never reaches a Durable Object.
+      await authorize(request, env);
       const url = new URL(request.url);
       if (
         env.ADMISSION_ENABLED !== 'true' &&
@@ -82,8 +98,20 @@ export default {
         throw new ProtocolError('RELAY_BUSY', 503);
       // All requests, including malformed/unsigned requests and newly minted
       // identities, pass the same durable quota BEFORE body reads or per-device DO creation.
+      const now = Date.now();
+      if (now < stoppedUntil)
+        throw new ProtocolError(
+          'GLOBAL_QUOTA_EXCEEDED',
+          429,
+          Math.max(1, Math.ceil((resumeAt - now) / 1000)),
+        );
       const ip = await digest(request.headers.get('CF-Connecting-IP') ?? 'loopback-development');
-      lease = admitted(await env.ADMISSION.getByName(ADMISSION_OBJECT).begin(ip)).id;
+      const decision = await env.ADMISSION.getByName(ADMISSION_OBJECT).begin(ip);
+      if (decision.budget) {
+        resumeAt = now + (decision.retry_after ?? 60) * 1000;
+        stoppedUntil = Math.min(resumeAt, now + BUDGET_RECHECK_MS);
+      }
+      lease = admitted(decision).id;
       if (url.search) throw new ProtocolError();
       const body = await boundedBody(request);
       if (request.method === 'POST' && url.pathname === '/v1/challenge') {
@@ -118,6 +146,8 @@ export default {
         )
           throw new ProtocolError('ACCESS_INVALID', 401);
         let result;
+        // The challenge's expiry alarm in AccessGate is a second invocation.
+        calls += 2;
         try {
           result = await env.AUTH.getByName('device:' + value.device_id).issue(value);
         } catch (error) {
@@ -152,6 +182,7 @@ export default {
       )
         throw new ProtocolError('ACCESS_INVALID', 401);
       let device: string;
+      calls++;
       try {
         device = await env.AUTH.getByName('device:' + proof.challenge.device_id).consume(proof);
       } catch (error) {
@@ -165,6 +196,7 @@ export default {
         if (!env.OPERATOR_DEVICE_IDS?.split(',').includes(device))
           throw new ProtocolError('NOT_AUTHORIZED', 403);
         record(strictJson(body), []);
+        calls++;
         return Response.json(await env.ADMISSION.getByName(ADMISSION_OBJECT).status(), {
           headers: { 'Cache-Control': 'no-store' },
         });
@@ -178,14 +210,17 @@ export default {
         headers,
         body: request.method === 'POST' ? body : undefined,
       });
+      calls++;
       const response = await env.DEVICES.getByName(destination.publisher).fetch(forwarded);
       status = response.status;
       if (
         response.status === 200 &&
         ['access', 'pair'].includes(destination.operation) &&
         features(request).has(PREPARED_JOIN)
-      )
+      ) {
+        calls += 2; // AccessGate issues the join challenge and later expires it.
         return await withJoinChallenge(env, response, destination.publisher, proof.challenge);
+      }
       return response;
     } catch (error) {
       const response = failure(error);
@@ -195,12 +230,30 @@ export default {
       if (lease)
         ctx.waitUntil(
           env.ADMISSION.getByName(ADMISSION_OBJECT)
-            .finish(lease, status)
+            .finish(lease, status, calls)
             .catch(() => {}),
         );
     }
   },
 } satisfies ExportedHandler<Env>;
+
+async function authorize(request: Request, env: Env): Promise<void> {
+  const token = env.RELAY_ACCESS_TOKEN;
+  if (token === undefined || env.RELAY_ORIGIN === PUBLIC_ORIGIN) return;
+  if (!/^[\x21-\x7e]{16,512}$/.test(token)) throw new ProtocolError('RELAY_UNCONFIGURED', 503);
+  const header = request.headers.get('Authorization') ?? '';
+  if (!header.startsWith('Bearer ')) throw new ProtocolError('RELAY_AUTH_REQUIRED', 401);
+  // Compare fixed-length digests so the comparison time reveals nothing about the token.
+  const [given, expected] = await Promise.all([
+    crypto.subtle.digest('SHA-256', new TextEncoder().encode(header.slice(7))),
+    crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)),
+  ]);
+  const a = new Uint8Array(given),
+    b = new Uint8Array(expected);
+  let difference = 0;
+  for (let i = 0; i < a.length; i++) difference |= a[i] ^ b[i];
+  if (difference !== 0) throw new ProtocolError('RELAY_AUTH_INVALID', 401);
+}
 
 /** Issue the connector's join challenge here, near the connector. */
 async function withJoinChallenge(

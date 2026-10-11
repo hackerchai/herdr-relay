@@ -6,11 +6,50 @@ monthly ceiling and best-effort user-service scope. Production overrides are in
 `relay/wrangler.production.jsonc`; the table
 below gives general self-host defaults.
 
-Workers/SQLite DO remain on Free: exhaustion rejects requests rather than buying
-paid overages. Deployment checks reject a Workers/DO paid subscription. Account
-budget alerts at USD 5, 8 and 10 are enabled for `dns_manage@hackerchai.com`.
-These alerts include other account products and do not themselves stop spending.
+The account runs Workers Paid (USD 5 base). The [monthly budget](#monthly-budget)
+nearly stops the relay before usage exceeds what that plan includes, so the
+deployment does not buy overages. Deployment reports the plan and refuses to
+deploy the public relay with an access token. Account budget alerts at USD 5, 8
+and 10 are enabled for `dns_manage@hackerchai.com`. These alerts include other
+account products and do not themselves stop spending.
 Application payload logging remains disabled and offline mirror retention is 25h.
+
+## Monthly budget
+
+`Admission` meters each UTC month's usage the way Workers Paid bills it and
+refuses new work once any allowance is spent. The defaults are 90% of what the
+plan includes, leaving headroom for work the meter cannot see (CPU time,
+WebSocket pings, isolate-cached refusals):
+
+| Var | Default | Workers Paid includes |
+| --- | ---: | ---: |
+| MONTHLY_WORKER_REQUESTS | 9000000 | 10 million requests |
+| MONTHLY_DO_REQUESTS | 900000 | 1 million Durable Object requests |
+| MONTHLY_DO_GB_SECONDS | 360000 | 400,000 GB-s |
+| MONTHLY_DO_ROWS_WRITTEN | 45000000 | 50 million SQLite rows written |
+
+`MONTHLY_BUDGET` is `on` (default) or `off`. Each value is a positive integer and,
+unlike the engineering quotas below, may be raised by an operator who accepts
+overage charges.
+
+The meter is an estimate that errs high. Every Durable Object invocation (RPC
+session, fetch or alarm) counts as one request, 10 ms of 128 MB duration and 4
+rows written. Incoming WebSocket messages count 1/20 request and 1 ms each, as
+billed. The Worker reports the calls each entry request made; DeviceRelay
+reports its frames, alarms and outgoing calls with the Admission calls it
+already makes (channel renewals every 30 seconds, releases and publisher
+renewals). Frame counts live in hibernation-safe socket attachments, so waking
+from hibernation loses none.
+
+Once an allowance is spent, entry requests, new leases and lease renewals return
+`GLOBAL_QUOTA_EXCEEDED` with `Retry-After` up to one hour (never past the start
+of the next month). Each Worker isolate then refuses requests itself for a
+minute before asking `Admission` again, so a stopped relay costs Worker
+requests but almost no Durable Object work. Active channels close at their next
+renewal (about 30 seconds) and publishers when their lease expires (at most ten
+minutes). Service resumes automatically in the next UTC month, or within an
+hour of raising a limit. `relay status` shows the month's usage and limits; compare
+them with the account's billing analytics.
 
 ## Global coordination
 
@@ -35,8 +74,8 @@ engineering defaults; string vars can lower each value to a positive integer.
 The per-device, per-target, rate and credit-window constraints still apply.
 Creating new identities cannot enlarge any global pool. An IP bucket is only a
 short rate gate: users behind a NAT share it, so widespread `RATE_LIMITED` must
-be investigated before lowering it. No registration, payment or common bearer
-secret is introduced. Host presence has no daily uptime allowance or maximum
+be investigated before lowering it. No registration or payment is introduced, and
+the public relay never requires an access token (self-hosted relays may). Host presence has no daily uptime allowance or maximum
 connection age: a healthy host renews its bounded concurrency slot indefinitely.
 `GLOBAL_PUBLISHER_SECONDS_PER_DAY` is retired and ignored, including in older
 self-host configurations. The `publisher_ms` counter remains observational.

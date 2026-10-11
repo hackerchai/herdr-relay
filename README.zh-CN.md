@@ -44,6 +44,9 @@ herdr-relay pair
 否则自动回退到 Relay；主机菜单会显示每台主机的连接方式。使用直连需要主机防火墙
 放行 TCP 47120 端口。在 macOS 上，运行 `herdr-relay` 的应用可能需要“本地网络”权限。
 
+自建 Relay 的地址等设置可以用 `herdr-relay config set` 保存到 `config.toml`。
+自建 Relay 可能要求运营者提供的访问令牌：`herdr-relay config set token`。托管的 Relay 永远不需要令牌。
+
 ## 使用演示
 
 按名称选择共享的会话，即可连接到其中的智能体工作区。

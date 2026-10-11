@@ -626,10 +626,20 @@ pub fn listener_port(enabled: Option<&str>, port: Option<&str>) -> Option<u16> {
             .unwrap_or(DEFAULT_PORT),
     )
 }
+/// The environment, else `config.toml`, else the default port.
 pub fn configured_port() -> Option<u16> {
-    let var = |name| std::env::var(name).ok();
+    let config = crate::config::current();
+    let var = |name| std::env::var(name).ok().filter(|v: &String| !v.is_empty());
     listener_port(
-        var("HERDR_RELAY_DIRECT").as_deref(),
-        var("HERDR_RELAY_DIRECT_PORT").as_deref(),
+        var("HERDR_RELAY_DIRECT")
+            .or_else(|| {
+                config
+                    .direct
+                    .map(|on| if on { "on" } else { "off" }.to_owned())
+            })
+            .as_deref(),
+        var("HERDR_RELAY_DIRECT_PORT")
+            .or_else(|| config.direct_port.map(|port| port.to_string()))
+            .as_deref(),
     )
 }

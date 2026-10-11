@@ -20,6 +20,38 @@ fn host_status(status: &str, route: Option<crate::direct::Route>) -> String {
     }
 }
 
+fn needs_token(error: &Error) -> bool {
+    matches!(error.code, "RELAY_AUTH_REQUIRED" | "RELAY_AUTH_INVALID")
+}
+
+/// Ask for a self-hosted relay's access token and save it in config.toml.
+async fn ask_token(screen: &mut Screen, origin: &str) -> Result<bool> {
+    loop {
+        let Some(token) = screen
+            .input(
+                "Relay access token",
+                &format!(
+                    "{origin} requires an access token from its operator. It is saved in config.toml and sent only to this relay."
+                ),
+                true,
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
+        match crate::config::path()
+            .and_then(|path| crate::config::save_token(&path, origin, &token))
+        {
+            Ok(()) => return Ok(true),
+            Err(e) => {
+                screen
+                    .message("Could not save the token", &e.to_string())
+                    .await?
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Session {
     name: String,
@@ -134,6 +166,28 @@ pub async fn serve(profile: &Path, origin: &str, config: &Path) -> Result<()> {
         };
         if !apply {
             continue;
+        }
+        // A self-hosted relay may require a token; ask now instead of letting
+        // the background service fail out of sight.
+        if origin != crate::config::PUBLIC_ORIGIN {
+            Identity::initialize(profile)?;
+            let relay = crate::relay::Relay::new(profile, origin, None)?;
+            match screen
+                .wait("Checking the relay", relay.check_access())
+                .await
+            {
+                Err(e) if needs_token(&e) => {
+                    if !ask_token(&mut screen, origin).await? {
+                        continue;
+                    }
+                    // A running service rereads config.toml when it starts again.
+                    if user_service::configuration(profile)?.is_some() {
+                        user_service::stop(profile).await?;
+                    }
+                }
+                Err(e) if e.code == "CANCELLED" => return Err(e),
+                _ => {}
+            }
         }
         let chosen: Vec<_> = sessions
             .iter()
@@ -255,22 +309,34 @@ async fn copy_link(value: &str) -> Result<()> {
     Err(Error::new("CLIPBOARD", "clipboard unavailable"))
 }
 
-async fn pair_in(screen: &mut Screen, profile: &Path) -> Result<Option<(String, String)>> {
+/// `local` is the loopback development transport, as with `--relay-local-url`.
+async fn pair_in(
+    screen: &mut Screen,
+    profile: &Path,
+    local: Option<&str>,
+) -> Result<Option<(String, String)>> {
+    let mut retry: Option<String> = None;
     loop {
-        let Some(value) = screen
-            .input(
-                "Pair a host",
-                "Paste the complete pairing link from herdr-relay serve.",
-                true,
-            )
-            .await?
-        else {
-            return Ok(None);
+        let value = match retry.take() {
+            Some(value) => value,
+            None => {
+                let Some(value) = screen
+                    .input(
+                        "Pair a host",
+                        "Paste the complete pairing link from herdr-relay serve.",
+                        true,
+                    )
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                value
+            }
         };
         let result = async {
             let link = PairLink::decode(&value)?;
             Identity::initialize(profile)?;
-            let relay = crate::relay::Relay::new(profile, &link.invitation.origin, None)?;
+            let relay = crate::relay::Relay::new(profile, &link.invitation.origin, local)?;
             relay.accept(&link.invitation).await?;
             let host = names::remember(
                 profile,
@@ -288,6 +354,13 @@ async fn pair_in(screen: &mut Screen, profile: &Path) -> Result<Option<(String, 
             }
             Err(e) if e.code == "BACK" => continue,
             Err(e) if e.code == "CANCELLED" => return Err(e),
+            Err(e) if needs_token(&e) => {
+                // Retry the same link once the relay's token is saved.
+                let origin = PairLink::decode(&value)?.invitation.origin;
+                if ask_token(screen, &origin).await? {
+                    retry = Some(value);
+                }
+            }
             Err(e) => screen.message("Could not pair", &e.to_string()).await?,
         }
     }
@@ -295,10 +368,10 @@ async fn pair_in(screen: &mut Screen, profile: &Path) -> Result<Option<(String, 
 
 pub async fn pair(profile: &Path, herdr: &Path) -> Result<()> {
     let mut screen = Screen::new()?;
-    let paired = pair_in(&mut screen, profile).await?;
+    let paired = pair_in(&mut screen, profile, None).await?;
     drop(screen);
     if let Some((origin, identity)) = paired {
-        connect(profile, &origin, herdr, Some(identity)).await?;
+        connect(profile, &origin, herdr, Some(identity), None).await?;
     }
     Ok(())
 }
@@ -308,6 +381,7 @@ pub async fn connect(
     origin: &str,
     herdr: &Path,
     mut selected_host: Option<String>,
+    local: Option<&str>,
 ) -> Result<()> {
     let mut screen = Screen::new()?;
     let mut origin = if origin == DEFAULT_ORIGIN {
@@ -329,7 +403,7 @@ pub async fn connect(
             {
                 Choice::Back => return Ok(()),
                 Choice::Pick(_) => {
-                    if let Some((new_origin, host)) = pair_in(&mut screen, profile).await? {
+                    if let Some((new_origin, host)) = pair_in(&mut screen, profile, local).await? {
                         origin = new_origin;
                         selected_host = Some(host);
                     }
@@ -347,7 +421,7 @@ pub async fn connect(
             .iter()
             .map(|g| names::remember(profile, &origin, &g.device_id, None, None))
             .collect::<Result<_>>()?;
-        let relay = crate::relay::Relay::new(profile, &origin, None)?;
+        let relay = crate::relay::Relay::new(profile, &origin, local)?;
         let host = if let Some(identity) = selected_host.take() {
             hosts.iter().find(|h| h.identity == identity).cloned()
         } else {
@@ -374,6 +448,7 @@ pub async fn connect(
                         {
                             Ok(Ok(_)) => host_status("online", relay.route(&host.identity)),
                             Ok(Err(e)) if e.code == "NOT_AUTHORIZED" => "access revoked".into(),
+                            Ok(Err(e)) if needs_token(&e) => "relay token required".into(),
                             _ => "offline / unavailable".into(),
                         };
                         // A refreshed hostname takes effect on the next menu load.
@@ -406,7 +481,7 @@ pub async fn connect(
                 }
                 Choice::Pick(i) if i < hosts.len() => Some(hosts[i].clone()),
                 Choice::Pick(_) => {
-                    if let Some((new_origin, host)) = pair_in(&mut screen, profile).await? {
+                    if let Some((new_origin, host)) = pair_in(&mut screen, profile, local).await? {
                         origin = new_origin;
                         selected_host = Some(host);
                     }
@@ -426,6 +501,13 @@ pub async fn connect(
                 Ok(targets) => targets,
                 Err(e) if e.code == "BACK" => break,
                 Err(e) if e.code == "CANCELLED" => return Err(e),
+                Err(e) if needs_token(&e) => {
+                    // The next pass builds a relay client with the saved token.
+                    if ask_token(&mut screen, &origin).await? {
+                        selected_host = Some(host.identity.clone());
+                    }
+                    break;
+                }
                 Err(e) => {
                     screen
                         .message(

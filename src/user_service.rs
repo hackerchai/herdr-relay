@@ -237,6 +237,7 @@ fn definition(paths: &Paths, profile: &Path, origin: &str, login: bool) -> Resul
         "XDG_CONFIG_HOME",
         "XDG_STATE_HOME",
         "XDG_RUNTIME_DIR",
+        "HERDR_RELAY_CONFIG",
     ] {
         if let Ok(value) = std::env::var(key) {
             environment.push_str(&format!(
@@ -288,6 +289,7 @@ fn linux_definition(paths: &Paths, profile: &Path, origin: &str) -> Result<Strin
         "XDG_CONFIG_HOME",
         "XDG_STATE_HOME",
         "XDG_RUNTIME_DIR",
+        "HERDR_RELAY_CONFIG",
     ] {
         if let Ok(value) = std::env::var(key) {
             environment.push_str(&format!(

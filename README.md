@@ -48,6 +48,10 @@ menu shows which path each host uses. Allow TCP port 47120 on the host's
 firewall to use it. On macOS, the app running `herdr-relay` may need Local
 Network permission.
 
+Save settings such as a self-hosted Relay's origin with `herdr-relay config set`
+(stored in `config.toml`). A self-hosted Relay may require an access token from
+its operator: `herdr-relay config set token`. The hosted Relay never does.
+
 ## In action
 
 Choose a shared session by name, then connect to its agent workspace.

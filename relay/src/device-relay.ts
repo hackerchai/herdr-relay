@@ -23,8 +23,9 @@ import {
 } from './limits.ts';
 import { restoredChannelValid } from './recovery.ts';
 import type { Env } from './index.ts';
+import type { Room } from './room.ts';
 import { ADMISSION_OBJECT, admitted } from './admission.ts';
-import { PUBLISHER_LEASE_MS } from './admission-ledger.ts';
+import { PUBLISHER_LEASE_MS, type Usage } from './admission-ledger.ts';
 
 type Control = {
   kind: 'control';
@@ -51,6 +52,8 @@ type Pair = {
   flow: Flow;
   limits: Limits;
   messages: number;
+  /** `messages` already reported to Admission for the monthly budget. */
+  reported?: number;
 };
 type Attachment = Control | Pair;
 type Channel = {
@@ -77,6 +80,11 @@ export class DeviceRelay extends DurableObject<Env> {
   /** Channel expiries read from SQL; only ever raised by renewal, dropped on end. */
   private readonly expiries = new Map<string, number>();
   private readonly constructedAt = Date.now();
+  /**
+   * Billable work not yet reported to Admission. Channel frames are counted
+   * in the hibernation-safe socket attachments instead.
+   */
+  private pending = { frames: 0, calls: 0 };
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(
@@ -255,6 +263,7 @@ export class DeviceRelay extends DurableObject<Env> {
     await this.env.ADMISSION.getByName(ADMISSION_OBJECT).authenticated(
       'channel:' + row.publisher + ':' + row.id,
       row.reservation,
+      this.usage(),
     );
     if (!this.current(row)) throw new ProtocolError('CHANNEL_EXPIRED', 409);
     this.ctx.storage.sql.exec(
@@ -312,6 +321,8 @@ export class DeviceRelay extends DurableObject<Env> {
         'publisher:' + device,
         boot,
         PUBLISHER_LEASE_MS,
+        false,
+        this.usage(),
       ),
     );
     // A fresh proof from this publisher replaces a half-open older control
@@ -396,7 +407,7 @@ export class DeviceRelay extends DurableObject<Env> {
       throw new ProtocolError('TARGET_BUSY', 409);
     if (
       purpose === 'attach' &&
-      !(await this.env.ROOMS.getByName(host.device + ':' + target).reserve(reservation, expires))
+      !(await this.room(host.device + ':' + target).reserve(reservation, expires))
     )
       throw new ProtocolError('TARGET_BUSY', 409);
     let globalReserved = false;
@@ -407,6 +418,8 @@ export class DeviceRelay extends DurableObject<Env> {
           'channel:' + host.device + ':' + body.channel_id,
           reservation,
           30000,
+          false,
+          this.usage(),
         ),
       );
       globalReserved = true;
@@ -482,9 +495,9 @@ export class DeviceRelay extends DurableObject<Env> {
         await this.env.ADMISSION.getByName(ADMISSION_OBJECT).release(
           'channel:' + host.device + ':' + body.channel_id,
           reservation,
+          this.usage(),
         );
-      if (purpose === 'attach')
-        await this.env.ROOMS.getByName(host.device + ':' + target).release(reservation);
+      if (purpose === 'attach') await this.room(host.device + ':' + target).release(reservation);
       throw error;
     }
     await this.ctx.storage.sync();
@@ -493,16 +506,17 @@ export class DeviceRelay extends DurableObject<Env> {
       throw new ProtocolError('HOST_OFFLINE', 409);
     }
     // Pre-issue the publisher's join challenge so joining needs no extra round trip.
-    const joinChallenge =
-      host.features?.includes(PREPARED_JOIN) && host.public_key
-        ? await prepareJoin(
-            this.env,
-            host.device,
-            host.public_key,
-            `/v1/devices/${host.device}/channels/${body.channel_id}/publisher`,
-            hostTicket,
-          )
-        : undefined;
+    const prepare = host.features?.includes(PREPARED_JOIN) && host.public_key;
+    if (prepare) this.pending.calls += 2; // the challenge and its expiry alarm
+    const joinChallenge = prepare
+      ? await prepareJoin(
+          this.env,
+          host.device,
+          host.public_key!,
+          `/v1/devices/${host.device}/channels/${body.channel_id}/publisher`,
+          hostTicket,
+        )
+      : undefined;
     if (this.control() !== control) {
       this.endChannel(body.channel_id, reservation, 'HOST_OFFLINE');
       throw new ProtocolError('HOST_OFFLINE', 409);
@@ -615,6 +629,7 @@ export class DeviceRelay extends DurableObject<Env> {
             await this.env.ADMISSION.getByName(ADMISSION_OBJECT).renew(
               'channel:' + row.publisher + ':' + row.id,
               row.reservation,
+              this.usage(),
             ),
           ).expires!;
         } catch (error) {
@@ -626,9 +641,7 @@ export class DeviceRelay extends DurableObject<Env> {
           throw error;
         }
         this.count('room_renewals');
-        const roomExpiry = await this.env.ROOMS.getByName(row.publisher + ':' + row.target).renew(
-          row.reservation,
-        );
+        const roomExpiry = await this.room(row.publisher + ':' + row.target).renew(row.reservation);
         const expires = roomExpiry ? Math.min(roomExpiry, globalExpiry) : null;
         if (
           !expires ||
@@ -664,6 +677,7 @@ export class DeviceRelay extends DurableObject<Env> {
       return;
     }
     if (state.kind === 'control') {
+      this.pending.frames++;
       if (typeof message === 'string' && state.features?.includes(CONTROL_AUTHENTICATED))
         return this.controlMessage(ws, state, message);
       this.endControl(ws, state.boot);
@@ -738,7 +752,11 @@ export class DeviceRelay extends DurableObject<Env> {
   private endControl(ws: WebSocket, boot: string): void {
     const host = ws.deserializeAttachment() as Control;
     this.ctx.waitUntil(
-      this.env.ADMISSION.getByName(ADMISSION_OBJECT).release('publisher:' + host.device, boot),
+      this.env.ADMISSION.getByName(ADMISSION_OBJECT).release(
+        'publisher:' + host.device,
+        boot,
+        this.usage(),
+      ),
     );
     this.ctx.storage.sql.exec(
       'INSERT OR REPLACE INTO metadata_expiry VALUES (1,?)',
@@ -774,6 +792,7 @@ export class DeviceRelay extends DurableObject<Env> {
   private endChannel(channel: string, reservation: string, reason: string): void {
     this.expiries.delete(channel + ':' + reservation);
     const sockets = this.channelSockets(channel, reservation);
+    const frames = this.channelFrames(sockets);
     const peak = Math.max(
       0,
       ...sockets.map((ws) => {
@@ -814,12 +833,11 @@ export class DeviceRelay extends DurableObject<Env> {
         this.env.ADMISSION.getByName(ADMISSION_OBJECT).release(
           'channel:' + row.publisher + ':' + row.id,
           reservation,
+          this.usage(frames),
         ),
       );
       if (row.purpose === 'attach')
-        this.ctx.waitUntil(
-          this.env.ROOMS.getByName(row.publisher + ':' + row.target).release(reservation),
-        );
+        this.ctx.waitUntil(this.room(row.publisher + ':' + row.target).release(reservation));
     }
   }
   private async release(request: Request, device: string, channel: string): Promise<Response> {
@@ -857,15 +875,37 @@ export class DeviceRelay extends DurableObject<Env> {
     // Await the exact reservation release before acknowledging cleanup. Late
     // callbacks still compare reservation IDs and cannot free a newer owner.
     if (row?.purpose === 'attach')
-      await this.env.ROOMS.getByName(row.publisher + ':' + row.target).release(row.reservation);
+      await this.room(row.publisher + ':' + row.target).release(row.reservation);
     if (row)
       await this.env.ADMISSION.getByName(ADMISSION_OBJECT).release(
         'channel:' + row.publisher + ':' + row.id,
         row.reservation,
+        this.usage(),
       );
     await this.ctx.storage.sync();
     await this.arm();
     return Response.json({ released: true });
+  }
+  /** Take the unreported usage, adding the given channel frames. */
+  private usage(frames = 0): Usage {
+    const usage = { frames: this.pending.frames + frames, calls: this.pending.calls };
+    this.pending = { frames: 0, calls: 0 };
+    return usage;
+  }
+  /** Mark a channel's incoming messages reported and return how many were new. */
+  private channelFrames(sockets: WebSocket[]): number {
+    let frames = 0;
+    for (const ws of sockets) {
+      const attachment = ws.deserializeAttachment() as Pair;
+      frames += Math.max(0, attachment.messages - (attachment.reported ?? 0));
+      if (attachment.reported !== attachment.messages)
+        ws.serializeAttachment({ ...attachment, reported: attachment.messages });
+    }
+    return frames;
+  }
+  private room(name: string): DurableObjectStub<Room> {
+    this.pending.calls++;
+    return this.env.ROOMS.getByName(name);
   }
   private control(): WebSocket | undefined {
     const sockets = this.ctx
@@ -1059,6 +1099,7 @@ export class DeviceRelay extends DurableObject<Env> {
   }
   async alarm(): Promise<void> {
     this.count('alarms');
+    this.pending.calls++;
     await this.expire();
     const control = this.control(),
       host = control?.deserializeAttachment() as Control | undefined;
@@ -1068,6 +1109,7 @@ export class DeviceRelay extends DurableObject<Env> {
           await this.env.ADMISSION.getByName(ADMISSION_OBJECT).renew(
             'publisher:' + host.device,
             host.boot,
+            this.usage(),
           ),
         );
         if (this.control() === control)
@@ -1125,6 +1167,7 @@ export class DeviceRelay extends DurableObject<Env> {
           await this.env.ADMISSION.getByName(ADMISSION_OBJECT).renew(
             'channel:' + row.publisher + ':' + row.id,
             row.reservation,
+            this.usage(this.channelFrames(peers)),
           ),
         ).expires!;
       } catch (error) {
@@ -1135,9 +1178,7 @@ export class DeviceRelay extends DurableObject<Env> {
         );
         continue;
       }
-      const roomExpiry = await this.env.ROOMS.getByName(row.publisher + ':' + row.target).renew(
-        row.reservation,
-      );
+      const roomExpiry = await this.room(row.publisher + ':' + row.target).renew(row.reservation);
       const expires = roomExpiry ? Math.min(roomExpiry, globalExpiry) : null;
       if (!expires || !this.current(row) || !this.control()) {
         this.endChannel(row.id, row.reservation, 'CHANNEL_EXPIRED');

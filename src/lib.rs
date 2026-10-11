@@ -1,5 +1,6 @@
 pub mod access;
 pub mod client;
+pub mod config;
 pub mod control;
 pub mod direct;
 pub mod frame;
