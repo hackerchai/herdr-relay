@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use herdr_relay::{Error, Result, native::NativeTarget};
 use std::path::PathBuf;
 
@@ -124,6 +124,12 @@ enum Action {
         #[arg(long, hide = true)]
         relay_local_url: Option<String>,
     },
+    /// Save settings in config.toml (flags and environment variables still win).
+    #[command(display_order = 45)]
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Change the Relay trust scope while preserving identity and shared targets.
     #[command(hide = true)]
     Relay {
@@ -228,6 +234,27 @@ enum Action {
         herdr_config_dir: Option<PathBuf>,
         #[arg(long, env = "HERDR_RELAY_HERDR", default_value = "herdr")]
         herdr: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Show the configuration file and its settings; tokens stay hidden.
+    Show,
+    /// Save a setting: origin, profile, herdr, update-repository, direct (on/off),
+    /// direct-port or token. Omit a token's value to enter it hidden.
+    Set {
+        key: String,
+        value: Option<String>,
+        /// The self-hosted relay a token belongs to (default: the configured origin).
+        #[arg(long)]
+        origin: Option<String>,
+    },
+    /// Remove a setting so its environment variable or default applies.
+    Unset {
+        key: String,
+        #[arg(long)]
+        origin: Option<String>,
     },
 }
 
@@ -346,7 +373,17 @@ enum IdentityAction {
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run(Cli::parse()).await {
+    let config =
+        match herdr_relay::config::path().and_then(|p| herdr_relay::config::Config::load(&p)) {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        };
+    let cli = try_parse_with(std::env::args_os(), &config).unwrap_or_else(|e| e.exit());
+    herdr_relay::config::use_config(config);
+    if let Err(error) = run(cli).await {
         if error.code == "BACK" {
             return;
         }
@@ -355,22 +392,81 @@ async fn main() {
     }
 }
 
-/// Plain `herdr-relay` opens the host menu, honoring the same environment.
-fn default_action() -> Action {
-    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+/// Parse arguments with `config.toml` values as defaults below flags and
+/// environment variables. Arguments are matched by their environment variable.
+fn try_parse_with<I, T>(
+    args: I,
+    config: &herdr_relay::config::Config,
+) -> std::result::Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    fn defaults(command: clap::Command, values: &[(&str, String)]) -> clap::Command {
+        command
+            .mut_args(|arg| {
+                let value = arg.get_env().and_then(|env| {
+                    values
+                        .iter()
+                        .find(|(name, _)| env == std::ffi::OsStr::new(name))
+                });
+                match value {
+                    Some((_, value)) => arg.default_value(value.clone()),
+                    None => arg,
+                }
+            })
+            .mut_subcommands(|sub| defaults(sub, values))
+    }
+    let values: Vec<(&str, String)> = [
+        ("HERDR_RELAY_ORIGIN", config.origin.clone()),
+        (
+            "HERDR_RELAY_PROFILE",
+            config.profile.as_ref().map(|p| p.display().to_string()),
+        ),
+        (
+            "HERDR_RELAY_HERDR",
+            config.herdr.as_ref().map(|p| p.display().to_string()),
+        ),
+        (
+            "HERDR_RELAY_UPDATE_REPOSITORY",
+            config.update_repository.clone(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| Some((name, value?)))
+    .collect();
+    let matches = defaults(Cli::command(), &values).try_get_matches_from(args)?;
+    Cli::from_arg_matches(&matches)
+}
+
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+/// Plain `herdr-relay` opens the host menu, honoring the environment and config.
+fn default_action(config: &herdr_relay::config::Config) -> Action {
     Action::Connect {
-        origin: var("HERDR_RELAY_ORIGIN").unwrap_or_else(|| DEFAULT_RELAY_ORIGIN.into()),
+        origin: env_var("HERDR_RELAY_ORIGIN")
+            .or_else(|| config.origin.clone())
+            .unwrap_or_else(|| DEFAULT_RELAY_ORIGIN.into()),
         host: None,
         target: None,
-        herdr: var("HERDR_RELAY_HERDR")
-            .unwrap_or_else(|| "herdr".into())
-            .into(),
+        herdr: herdr_path(config),
         relay_local_url: None,
     }
 }
 
+fn herdr_path(config: &herdr_relay::config::Config) -> PathBuf {
+    env_var("HERDR_RELAY_HERDR")
+        .map(PathBuf::from)
+        .or_else(|| config.herdr.clone())
+        .unwrap_or_else(|| "herdr".into())
+}
+
 async fn run(cli: Cli) -> Result<()> {
-    match cli.command.unwrap_or_else(default_action) {
+    let config = herdr_relay::config::current();
+    match cli.command.unwrap_or_else(|| default_action(&config)) {
+        Action::Config { action } => configure(action, &config),
         Action::Update {
             check,
             restart_service,
@@ -564,7 +660,14 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
             if host.is_none() && target.is_none() {
-                return herdr_relay::interactive::connect(&profile, &origin, &herdr, None).await;
+                return herdr_relay::interactive::connect(
+                    &profile,
+                    &origin,
+                    &herdr,
+                    None,
+                    relay_local_url.as_deref(),
+                )
+                .await;
             }
             let (Some(host), Some(target)) = (host, target) else {
                 return Err(Error::new(
@@ -604,8 +707,7 @@ async fn run(cli: Cli) -> Result<()> {
         Action::Pair { action } => {
             let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
             let Some(action) = action else {
-                return herdr_relay::interactive::pair(&profile, std::path::Path::new("herdr"))
-                    .await;
+                return herdr_relay::interactive::pair(&profile, &herdr_path(&config)).await;
             };
             match action {
                 PairAction::Create => {
@@ -693,6 +795,65 @@ async fn run(cli: Cli) -> Result<()> {
             herdr_relay::client::run_local(target, &herdr, &reattach).await
         }
     }
+}
+
+fn configure(action: ConfigAction, current: &herdr_relay::config::Config) -> Result<()> {
+    let path = herdr_relay::config::path()?;
+    let mut config = herdr_relay::config::Config::load(&path)?;
+    // A token belongs to the named relay, else the configured one.
+    let token_origin = |origin: Option<String>| {
+        origin
+            .or_else(|| env_var("HERDR_RELAY_ORIGIN"))
+            .or_else(|| current.origin.clone())
+    };
+    match action {
+        ConfigAction::Show => {
+            println!("{}\n{}", path.display(), config.show());
+            return Ok(());
+        }
+        ConfigAction::Set { key, value, origin } => {
+            let origin = (key == "token").then(|| token_origin(origin)).flatten();
+            let value = match value {
+                Some(value) => value,
+                None if key == "token" => {
+                    if origin.as_deref() == Some(herdr_relay::config::PUBLIC_ORIGIN) {
+                        return Err(Error::new(
+                            "PUBLIC_RELAY",
+                            "the public relay is open to everyone and never uses a token",
+                        ));
+                    }
+                    read_hidden_line(
+                        "Enter the relay access token (input hidden):",
+                        "CONFIG_INPUT",
+                    )?
+                }
+                None => {
+                    return Err(Error::new(
+                        "CONFIG_INVALID",
+                        format!("provide a value for {key}"),
+                    ));
+                }
+            };
+            config.set(&key, &value, origin.as_deref())?;
+            config.save(&path)?;
+            match origin {
+                Some(origin) => {
+                    println!("Saved the access token for {origin} in {}.", path.display())
+                }
+                None => println!("Saved {key} in {}.", path.display()),
+            }
+        }
+        ConfigAction::Unset { key, origin } => {
+            let origin = (key == "token").then(|| token_origin(origin)).flatten();
+            config.unset(&key, origin.as_deref())?;
+            config.save(&path)?;
+            println!("Removed {key} from {}.", path.display());
+        }
+    }
+    println!(
+        "A running background service applies changes after herdr-relay service stop and start."
+    );
+    Ok(())
 }
 
 fn print_peers(profile: &std::path::Path, origin: &str) -> Result<()> {
@@ -844,6 +1005,40 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// Read one line from stdin without echo when it is a terminal.
+fn read_hidden_line(prompt: &str, code: &'static str) -> Result<String> {
+    use std::{
+        io::{BufRead, IsTerminal},
+        os::fd::{AsFd, AsRawFd},
+    };
+    let io = |e: std::io::Error| Error::new(code, e.to_string());
+    let stdin = std::io::stdin();
+    let saved = if stdin.is_terminal() {
+        eprintln!("{prompt}");
+        let saved = herdr_relay::terminal::TerminalState::capture(stdin.as_fd()).map_err(io)?;
+        let mut mode = std::mem::MaybeUninit::uninit();
+        if unsafe { libc::tcgetattr(stdin.as_raw_fd(), mode.as_mut_ptr()) } != 0 {
+            return Err(io(std::io::Error::last_os_error()));
+        }
+        let mut mode = unsafe { mode.assume_init() };
+        mode.c_lflag &= !libc::ECHO;
+        if unsafe { libc::tcsetattr(stdin.as_raw_fd(), libc::TCSANOW, &mode) } != 0 {
+            return Err(io(std::io::Error::last_os_error()));
+        }
+        Some(saved)
+    } else {
+        None
+    };
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+    if saved.is_some() {
+        drop(saved);
+        eprintln!();
+    }
+    read.map_err(io)?;
+    Ok(line.trim().to_owned())
+}
+
 async fn read_invitation() -> Result<String> {
     use std::{
         io::{BufRead, IsTerminal, Read},
@@ -937,7 +1132,7 @@ mod tests {
             if origin == "https://relay.example.org" && herdr == std::path::Path::new("/opt/herdr/bin/herdr"))
         );
         assert!(
-            matches!(default_action(), Action::Connect { ref origin, ref herdr, .. }
+            matches!(default_action(&herdr_relay::config::Config::default()), Action::Connect { ref origin, ref herdr, .. }
             if origin == "https://relay.example.org" && herdr == std::path::Path::new("/opt/herdr/bin/herdr"))
         );
         // An explicit flag still wins over the environment.
@@ -956,5 +1151,131 @@ mod tests {
         assert!(
             matches!(cli.command, Some(Action::Serve { ref origin, .. }) if origin == DEFAULT_RELAY_ORIGIN)
         );
+    }
+    #[test]
+    fn config_file_values_sit_below_flags_and_environment() {
+        let _environment = super::cli_tests::ENVIRONMENT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut config = herdr_relay::config::Config::default();
+        config.set("origin", "https://file.example", None).unwrap();
+        config.set("herdr", "/file/herdr", None).unwrap();
+        config.set("profile", "/file/profile", None).unwrap();
+        config.set("update-repository", "file/fork", None).unwrap();
+        let cli = try_parse_with(["herdr-relay", "targets", "--host", "x"], &config).unwrap();
+        assert_eq!(
+            cli.profile.as_deref(),
+            Some(std::path::Path::new("/file/profile"))
+        );
+        assert!(
+            matches!(cli.command, Some(Action::Targets { ref origin, .. }) if origin == "https://file.example")
+        );
+        let cli = try_parse_with(["herdr-relay", "connect"], &config).unwrap();
+        assert!(
+            matches!(cli.command, Some(Action::Connect { ref herdr, .. }) if herdr == std::path::Path::new("/file/herdr"))
+        );
+        let cli = try_parse_with(["herdr-relay", "update"], &config).unwrap();
+        assert!(
+            matches!(cli.command, Some(Action::Update { ref repository, .. }) if repository.as_deref() == Some("file/fork"))
+        );
+        assert!(
+            matches!(default_action(&config), Action::Connect { ref origin, ref herdr, .. }
+            if origin == "https://file.example" && herdr == std::path::Path::new("/file/herdr"))
+        );
+        // The local diagnostic keeps its own placeholder origin.
+        let cli = try_parse_with(
+            [
+                "herdr-relay",
+                "identity",
+                "diagnose",
+                "--peer-profile",
+                "/p",
+            ],
+            &config,
+        )
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Action::Identity { action: IdentityAction::Diagnose { ref origin, .. } })
+            if origin == "https://diagnostic.invalid"
+        ));
+        // Environment and flags still win.
+        unsafe { std::env::set_var("HERDR_RELAY_ORIGIN", "https://env.example") };
+        let cli = try_parse_with(["herdr-relay", "serve"], &config).unwrap();
+        assert!(
+            matches!(cli.command, Some(Action::Serve { ref origin, .. }) if origin == "https://env.example")
+        );
+        assert!(
+            matches!(default_action(&config), Action::Connect { ref origin, .. } if origin == "https://env.example")
+        );
+        unsafe { std::env::remove_var("HERDR_RELAY_ORIGIN") };
+        let cli = try_parse_with(
+            ["herdr-relay", "serve", "--origin", "https://flag.example"],
+            &config,
+        )
+        .unwrap();
+        assert!(
+            matches!(cli.command, Some(Action::Serve { ref origin, .. }) if origin == "https://flag.example")
+        );
+    }
+
+    #[test]
+    fn config_commands_parse() {
+        let empty = herdr_relay::config::Config::default();
+        assert!(matches!(
+            try_parse_with(["herdr-relay", "config", "show"], &empty)
+                .unwrap()
+                .command,
+            Some(Action::Config {
+                action: ConfigAction::Show
+            })
+        ));
+        assert!(matches!(
+            try_parse_with(["herdr-relay", "config", "set", "origin", "https://x.example"], &empty)
+                .unwrap()
+                .command,
+            Some(Action::Config { action: ConfigAction::Set { ref key, value: Some(ref value), origin: None } })
+            if key == "origin" && value == "https://x.example"
+        ));
+        assert!(matches!(
+            try_parse_with(
+                [
+                    "herdr-relay",
+                    "config",
+                    "set",
+                    "token",
+                    "--origin",
+                    "https://x.example"
+                ],
+                &empty
+            )
+            .unwrap()
+            .command,
+            Some(Action::Config {
+                action: ConfigAction::Set {
+                    value: None,
+                    origin: Some(_),
+                    ..
+                }
+            })
+        ));
+        assert!(matches!(
+            try_parse_with(
+                [
+                    "herdr-relay",
+                    "config",
+                    "unset",
+                    "token",
+                    "--origin",
+                    "https://x.example"
+                ],
+                &empty
+            )
+            .unwrap()
+            .command,
+            Some(Action::Config {
+                action: ConfigAction::Unset { .. }
+            })
+        ));
     }
 }

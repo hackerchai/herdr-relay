@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { AdmissionLedger, type LeaseKind, type Decision } from './admission-ledger.ts';
+import { AdmissionLedger, type LeaseKind, type Decision, type Usage } from './admission-ledger.ts';
 import { ProtocolError } from './protocol.ts';
 import type { Env } from './index.ts';
 
@@ -30,8 +30,8 @@ export class Admission extends DurableObject<Env> {
     await this.arm();
     return r;
   }
-  finish(id: string, status: number): void {
-    this.ledger.finish(id, status);
+  finish(id: string, status: number, calls = 0): void {
+    this.ledger.finish(id, status, calls);
   }
   async hold(
     kind: LeaseKind,
@@ -39,28 +39,34 @@ export class Admission extends DurableObject<Env> {
     owner: string,
     duration: number,
     diagnostic = false,
+    usage?: Usage,
   ): Promise<Decision> {
-    if (this.env.ADMISSION_ENABLED !== 'true' && !(kind === 'challenge' && diagnostic))
+    if (this.env.ADMISSION_ENABLED !== 'true' && !(kind === 'challenge' && diagnostic)) {
+      this.ledger.charge(usage);
       return { code: 'RELAY_BUSY', retry_after: 60 };
-    const r = this.ledger.hold(kind, id, owner, duration);
+    }
+    const r = this.ledger.hold(kind, id, owner, duration, usage);
     await this.arm();
     return r;
   }
-  renew(id: string, owner: string): Decision {
-    return this.env.ADMISSION_ENABLED === 'true'
-      ? this.ledger.renew(id, owner)
-      : { code: 'RELAY_BUSY', retry_after: 60 };
+  renew(id: string, owner: string, usage?: Usage): Decision {
+    if (this.env.ADMISSION_ENABLED === 'true') return this.ledger.renew(id, owner, usage);
+    this.ledger.charge(usage);
+    return { code: 'RELAY_BUSY', retry_after: 60 };
   }
-  authenticated(id: string, owner: string): void {
+  authenticated(id: string, owner: string, usage?: Usage): void {
+    this.ledger.charge(usage);
     this.ledger.authenticated(id, owner);
   }
-  release(id: string, owner: string): void {
-    this.ledger.release(id, owner);
+  release(id: string, owner: string, usage?: Usage): void {
+    this.ledger.release(id, owner, usage);
   }
   status() {
+    this.ledger.charge();
     return { ...this.ledger.status(), admission_enabled: this.env.ADMISSION_ENABLED === 'true' };
   }
   async alarm(): Promise<void> {
+    this.ledger.charge();
     this.ledger.cleanup();
     await this.arm();
   }

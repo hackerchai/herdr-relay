@@ -31,6 +31,8 @@ pub struct Relay {
     identity: Arc<Identity>,
     origin: String,
     base: String,
+    /// `Bearer …` for a self-hosted relay that requires an access token.
+    authorization: Option<String>,
     http: reqwest::Client,
     state_sync: Arc<tokio::sync::Mutex<()>>,
     revocations: tokio::sync::watch::Sender<u64>,
@@ -103,6 +105,24 @@ impl Relay {
         self.post("/v1/operator/status", &serde_json::json!({}))
             .await
     }
+    /// Whether this relay accepts our access token (or needs none). An
+    /// unsigned request is enough: authorization is checked before anything else.
+    pub async fn check_access(&self) -> Result<()> {
+        let response = self
+            .http
+            .post(format!("{}/v1/challenge", self.base))
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .map_err(network)?;
+        match response_json::<serde_json::Value>(response).await {
+            Err(error) if matches!(error.code, "RELAY_AUTH_REQUIRED" | "RELAY_AUTH_INVALID") => {
+                Err(error)
+            }
+            _ => Ok(()),
+        }
+    }
     pub fn is_online(&self) -> bool {
         self.state_ready.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -131,6 +151,18 @@ impl Relay {
             "X-Relay-Features",
             reqwest::header::HeaderValue::from_static(crate::stream::FEATURES),
         );
+        let authorization = crate::config::access_token(origin)
+            .map(|token| {
+                crate::config::validate_token(&token)?;
+                Ok::<_, Error>(format!("Bearer {token}"))
+            })
+            .transpose()?;
+        if let Some(value) = &authorization {
+            let mut value =
+                reqwest::header::HeaderValue::from_str(value).map_err(|_| protocol())?;
+            value.set_sensitive(true);
+            features.insert(reqwest::header::AUTHORIZATION, value);
+        }
         let http = reqwest::Client::builder()
             .default_headers(features)
             .redirect(reqwest::redirect::Policy::none())
@@ -143,6 +175,7 @@ impl Relay {
             identity: Arc::new(Identity::load(profile)?),
             origin: origin.to_owned(),
             base,
+            authorization,
             http,
             state_sync: Arc::new(tokio::sync::Mutex::new(())),
             revocations: tokio::sync::watch::channel(0).0,
@@ -305,6 +338,11 @@ impl Relay {
             "X-Relay-Features",
             crate::stream::FEATURES.parse().map_err(|_| protocol())?,
         );
+        if let Some(value) = &self.authorization {
+            request
+                .headers_mut()
+                .insert("Authorization", value.parse().map_err(|_| protocol())?);
+        }
         request.headers_mut().insert(
             tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(header.as_bytes())
                 .map_err(|_| protocol())?,
@@ -978,14 +1016,23 @@ pub(crate) fn remote_error(code: &str) -> Error {
         "TICKET_INVALID" => "TICKET_INVALID",
         "RELAY_BUSY" => "RELAY_BUSY",
         "NOT_AUTHORIZED" => "NOT_AUTHORIZED",
+        "RELAY_AUTH_REQUIRED" => "RELAY_AUTH_REQUIRED",
+        "RELAY_AUTH_INVALID" => "RELAY_AUTH_INVALID",
         _ => "RELAY_ERROR",
     };
     Error::new(
         code,
-        if code == "GLOBAL_QUOTA_EXCEEDED" {
-            "the relay's global capacity or daily service quota is exhausted; retry later or choose a self-hosted relay"
-        } else {
-            "relay rejected the request"
+        match code {
+            "GLOBAL_QUOTA_EXCEEDED" => {
+                "the relay's global capacity or its daily or monthly service budget is exhausted; retry later or choose a self-hosted relay"
+            }
+            "RELAY_AUTH_REQUIRED" => {
+                "this relay requires an access token; set one with herdr-relay config set token --origin ORIGIN or HERDR_RELAY_TOKEN"
+            }
+            "RELAY_AUTH_INVALID" => {
+                "the relay rejected its access token; update it with herdr-relay config set token --origin ORIGIN"
+            }
+            _ => "relay rejected the request",
         },
     )
 }

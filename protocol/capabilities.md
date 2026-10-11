@@ -108,3 +108,23 @@ Any direct failure falls back to the relay within the same operation and
 suppresses direct attempts to that host for 10 minutes unless the host
 advertises a different endpoint. A direct attach leaves no relay channel to
 release on reconnect.
+
+## Relay access token
+
+Added in 0.2.5. Not negotiated: a self-hosted relay with the `RELAY_ACCESS_TOKEN`
+secret requires `Authorization: Bearer <token>` on every request, including
+WebSocket upgrades, and checks it before admission or any Durable Object. A
+missing or non-Bearer header returns `401 RELAY_AUTH_REQUIRED`; a wrong token
+returns `401 RELAY_AUTH_INVALID`; both carry `WWW-Authenticate: Bearer
+realm="herdr-relay"`. The comparison uses fixed-length digests. A token is
+16–512 visible ASCII characters; anything else is `RELAY_UNCONFIGURED`. The
+public relay `https://herdr-relay.hackerchai.com` ignores the setting and stays
+open. Endpoints send a token only to the origin it was configured for, never to
+the public relay, and never put it in invitations or the endpoint channel.
+
+## Monthly budget refusals
+
+Also added in 0.2.5. When a relay's monthly budget is spent, entry requests and
+lease renewals return `429 GLOBAL_QUOTA_EXCEEDED` with `Retry-After` of at most
+3600 seconds, so endpoints keep their existing retry behavior. See
+[operations](../docs/operations.md#monthly-budget).
