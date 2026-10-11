@@ -57,9 +57,13 @@ For every subsequent connection:
 herdr-relay
 ```
 
-`herdr-relay connect` opens the same menu. Hostnames identify computers; duplicate
-names receive distinct aliases. Press `a` in the host menu to assign a clearer
-local name. No device ID, target ID, or `--profile` is required.
+`herdr-relay connect` opens the same menu. Hosts are named after the computer
+(on macOS its computer name from Sharing settings); duplicate names receive
+distinct aliases. Press `a` in the host menu to assign a clearer local name, or
+`d` to remove a host you no longer use. `herdr-relay hosts list` and
+`herdr-relay hosts remove NAME` do the same from scripts. Removing is local:
+pairing again needs a new link, and the host can revoke this device with
+`herdr-relay peers revoke`. No device ID, target ID, or `--profile` is required.
 
 ## Keyboard help
 
@@ -96,6 +100,10 @@ system authorization. Relay does not create Herdr sessions on reboot; once the
 same Herdr session starts again, saved sharing resumes.
 
 Updates come from the download site, falling back to GitHub Releases, without any login.
+Relay checks for a new release once a day (when a menu opens and from the
+background service) and shows `Update available: … Run herdr-relay update.` in
+the menus and after they close. Change the interval with
+`herdr-relay config set update-check 6h`, or turn it off with `off`.
 Source installations can also update from crates.io:
 
 ```sh

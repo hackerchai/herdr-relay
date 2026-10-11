@@ -26,6 +26,7 @@ pub enum Choice {
     Back,
     Refresh,
     Rename(usize),
+    Delete(usize),
 }
 pub struct Screen {
     terminal: DefaultTerminal,
@@ -250,7 +251,7 @@ impl Screen {
                 selected,
                 &format!("{detail}\nSearch: {filter}"),
                 if aliases {
-                    "Enter  Select    / Search    r Refresh    a Rename    ? Help    Esc Back"
+                    "Enter  Select    / Search    r Refresh    a Rename    d Remove    ? Help    Esc Back"
                 } else {
                     "Enter  Select    / Search    r Refresh    ? Help    Esc Back"
                 },
@@ -294,6 +295,9 @@ impl Screen {
                     KeyCode::Char('r') => return Ok(Choice::Refresh),
                     KeyCode::Char('a') if aliases && !indices.is_empty() => {
                         return Ok(Choice::Rename(indices[selected]));
+                    }
+                    KeyCode::Char('d') | KeyCode::Delete if aliases && !indices.is_empty() => {
+                        return Ok(Choice::Delete(indices[selected]));
                     }
                     KeyCode::Enter if !indices.is_empty() => {
                         return Ok(Choice::Pick(indices[selected]));

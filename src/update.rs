@@ -267,6 +267,179 @@ fn site_invalid() -> Error {
     )
 }
 
+/// The last automatic check, kept in the profile.
+pub const CHECK_CACHE: &str = "update-check.json";
+#[derive(serde::Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Checked {
+    checked_at: u64,
+    latest: String,
+}
+
+/// `HERDR_RELAY_UPDATE_CHECK` / `update-check`: `off`, or `<n>m`, `<n>h` or
+/// `<n>d` of at least one hour. The default is one day.
+pub fn check_interval(value: Option<&str>) -> Result<Option<Duration>> {
+    let Some(value) = value else {
+        return Ok(Some(Duration::from_secs(86400)));
+    };
+    if value == "off" {
+        return Ok(None);
+    }
+    let invalid = || {
+        Error::new(
+            "UPDATE_CHECK",
+            "use off or an interval such as 6h or 1d (at least 1h)",
+        )
+    };
+    let (number, unit) = value.split_at(value.len().saturating_sub(1));
+    let seconds = match unit {
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86400,
+        _ => return Err(invalid()),
+    };
+    let n: u64 = number
+        .parse()
+        .ok()
+        .filter(|_| number.bytes().all(|b| b.is_ascii_digit()))
+        .ok_or_else(invalid)?;
+    let total = n.checked_mul(seconds).ok_or_else(invalid)?;
+    if total < 3600 {
+        return Err(invalid());
+    }
+    Ok(Some(Duration::from_secs(total)))
+}
+
+fn read_checked(profile: &Path) -> Option<Checked> {
+    let bytes = fs::read(profile.join(CHECK_CACHE)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// A one-line prompt when the last check found a newer release.
+pub fn notice(profile: &Path) -> Option<String> {
+    let checked = read_checked(profile)?;
+    let latest = semver::Version::parse(&checked.latest).ok()?;
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
+    (latest > current && latest.pre.is_empty())
+        .then(|| format!("Update available: {current} → {latest}. Run herdr-relay update."))
+}
+
+/// The automatic check settings: environment, then config.toml.
+pub struct Schedule {
+    pub interval: Option<Duration>,
+    pub site: Option<String>,
+    pub repository: Option<String>,
+}
+pub fn schedule() -> Result<Schedule> {
+    let config = crate::config::current();
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    Ok(Schedule {
+        interval: check_interval(
+            var("HERDR_RELAY_UPDATE_CHECK")
+                .or(config.update_check)
+                .as_deref(),
+        )?,
+        site: var("HERDR_RELAY_UPDATE_URL").or(config.update_url),
+        repository: var("HERDR_RELAY_UPDATE_REPOSITORY").or(config.update_repository),
+    })
+}
+
+/// The update prompt to show, unless automatic checks are turned off.
+pub fn prompt(profile: &Path) -> Option<String> {
+    schedule().ok()?.interval?;
+    notice(profile)
+}
+
+/// Refresh the cached check in the background if it is due; never blocks or fails.
+pub fn spawn_check(profile: &Path) {
+    let Ok(Schedule {
+        interval: Some(interval),
+        site,
+        repository,
+    }) = schedule()
+    else {
+        return;
+    };
+    let profile = profile.to_owned();
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(
+            Duration::from_secs(15),
+            refresh_if_due(&profile, interval, site.as_deref(), repository.as_deref()),
+        )
+        .await;
+    });
+}
+
+/// Check for a newer release if `interval` has passed since the last check.
+/// Returns whether a check ran; a failed check keeps the previous answer.
+pub async fn refresh_if_due(
+    profile: &Path,
+    interval: Duration,
+    site: Option<&str>,
+    repository: Option<&str>,
+) -> Result<bool> {
+    let sources = sources(site, repository)?;
+    refresh_at(profile, interval, &sources, std::time::SystemTime::now()).await
+}
+
+async fn refresh_at(
+    profile: &Path,
+    interval: Duration,
+    sources: &[Source],
+    now: std::time::SystemTime,
+) -> Result<bool> {
+    let now = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| invalid())?
+        .as_secs();
+    if read_checked(profile).is_some_and(|c| now.saturating_sub(c.checked_at) < interval.as_secs())
+    {
+        return Ok(false);
+    }
+    let mut failure = None;
+    for source in sources {
+        let latest = match source {
+            Source::Site(base) => Site::new(base)?.manifest().await.map(|m| m.version),
+            Source::GitHub(repository) => latest_github(repository).await,
+        };
+        match latest.and_then(|v| {
+            semver::Version::parse(&v).map_err(|_| invalid())?;
+            Ok(v)
+        }) {
+            Ok(latest) => {
+                let bytes = serde_json::to_vec(&Checked {
+                    checked_at: now,
+                    latest,
+                })
+                .map_err(|_| invalid())?;
+                write_atomic(&profile.join(CHECK_CACHE), &bytes, 0o600)?;
+                return Ok(true);
+            }
+            Err(error) => failure = Some(error),
+        }
+    }
+    Err(failure.unwrap_or_else(invalid))
+}
+
+async fn latest_github(repository: &str) -> Result<String> {
+    let (_, authenticated) = source(Some(repository));
+    let github = GitHub::new(authenticated).await?;
+    let bytes = github
+        .get(
+            &format!("https://api.github.com/repos/{repository}/releases?per_page=100"),
+            false,
+            4 * 1024 * 1024,
+        )
+        .await?;
+    let releases: Vec<Release> = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let release = select(&releases)?;
+    Ok(release
+        .tag_name
+        .strip_prefix('v')
+        .ok_or_else(invalid)?
+        .to_owned())
+}
+
 /// What a source offered: nothing to do, or a verified binary to install.
 enum Fetched {
     Done,
@@ -616,6 +789,109 @@ fn storage(error: std::io::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_check_interval_defaults_to_a_day_and_can_be_turned_off() {
+        let hour = Duration::from_secs(3600);
+        assert_eq!(check_interval(None).unwrap(), Some(24 * hour));
+        assert_eq!(check_interval(Some("off")).unwrap(), None);
+        assert_eq!(check_interval(Some("6h")).unwrap(), Some(6 * hour));
+        assert_eq!(check_interval(Some("2d")).unwrap(), Some(48 * hour));
+        assert_eq!(
+            check_interval(Some("90m")).unwrap(),
+            Some(Duration::from_secs(5400))
+        );
+        for bad in ["30m", "0h", "h", "1w", "-1h", "", "24"] {
+            assert_eq!(
+                check_interval(Some(bad)).unwrap_err().code,
+                "UPDATE_CHECK",
+                "{bad:?}"
+            );
+        }
+    }
+
+    fn profile() -> tempfile::TempDir {
+        let dir = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        crate::identity::Identity::initialize(dir.path()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_newer_cached_release_produces_a_notice() {
+        let dir = profile();
+        assert_eq!(notice(dir.path()), None);
+        let cache = |latest: &str| {
+            fs::write(
+                dir.path().join(CHECK_CACHE),
+                format!(r#"{{"checked_at":1,"latest":"{latest}"}}"#),
+            )
+            .unwrap();
+        };
+        cache("99.0.0");
+        let text = notice(dir.path()).unwrap();
+        assert!(
+            text.contains("99.0.0") && text.contains("herdr-relay update"),
+            "{text}"
+        );
+        cache(env!("CARGO_PKG_VERSION"));
+        assert_eq!(notice(dir.path()), None);
+        cache("0.0.1");
+        assert_eq!(notice(dir.path()), None);
+        cache("garbage");
+        assert_eq!(notice(dir.path()), None);
+    }
+
+    #[tokio::test]
+    async fn checks_run_only_when_the_interval_has_passed() {
+        let dir = profile();
+        let manifest = serde_json::json!({"schema":1,"version":"99.1.0","artifacts":[]});
+        let base = site(vec![(
+            "/latest/herdr-relay-update.json",
+            manifest.to_string().into_bytes(),
+        )])
+        .await;
+        let day = Duration::from_secs(86400);
+        let start = std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert!(
+            refresh_at(dir.path(), day, &[Source::Site(base.clone())], start)
+                .await
+                .unwrap()
+        );
+        assert!(notice(dir.path()).unwrap().contains("99.1.0"));
+        // Within the interval nothing is fetched, even from an unreachable site.
+        let later = start + day - Duration::from_secs(1);
+        assert!(
+            !refresh_at(
+                dir.path(),
+                day,
+                &[Source::Site("http://127.0.0.1:9".into())],
+                later
+            )
+            .await
+            .unwrap()
+        );
+        // Once due, a failed check leaves the previous answer in place.
+        let due = start + day;
+        assert!(
+            refresh_at(
+                dir.path(),
+                day,
+                &[Source::Site("http://127.0.0.1:9".into())],
+                due
+            )
+            .await
+            .is_err()
+        );
+        assert!(notice(dir.path()).unwrap().contains("99.1.0"));
+        assert!(
+            refresh_at(dir.path(), day, &[Source::Site(base.clone())], due)
+                .await
+                .unwrap()
+        );
+    }
+
     #[test]
     fn the_download_site_comes_first_and_github_releases_are_the_fallback() {
         assert_eq!(

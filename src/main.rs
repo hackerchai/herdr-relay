@@ -127,6 +127,12 @@ enum Action {
         #[arg(long, hide = true)]
         relay_local_url: Option<String>,
     },
+    /// List or remove hosts this device can access.
+    #[command(display_order = 35)]
+    Hosts {
+        #[command(subcommand)]
+        action: HostsAction,
+    },
     /// Save settings in config.toml (flags and environment variables still win).
     #[command(display_order = 45)]
     Config {
@@ -237,6 +243,21 @@ enum Action {
         herdr_config_dir: Option<PathBuf>,
         #[arg(long, env = "HERDR_RELAY_HERDR", default_value = "herdr")]
         herdr: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostsAction {
+    /// Show paired hosts with their aliases and device IDs.
+    List {
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
+    },
+    /// Forget a host by alias, name or device ID. Pairing again needs a new link.
+    Remove {
+        host: String,
+        #[arg(long, env = "HERDR_RELAY_ORIGIN", default_value = DEFAULT_RELAY_ORIGIN)]
+        origin: String,
     },
 }
 
@@ -471,6 +492,39 @@ async fn run(cli: Cli) -> Result<()> {
     let config = herdr_relay::config::current();
     match cli.command.unwrap_or_else(|| default_action(&config)) {
         Action::Config { action } => configure(action, &config),
+        Action::Hosts { action } => {
+            let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
+            match action {
+                HostsAction::List { origin } => {
+                    let origin = paired_origin(&profile, &origin)?;
+                    let hosts = herdr_relay::hosts::list(&profile, &origin)?;
+                    if hosts.is_empty() {
+                        println!("No paired hosts. Run herdr-relay pair to add one.");
+                    }
+                    for host in hosts {
+                        let name = if host.name == host.alias {
+                            String::new()
+                        } else {
+                            format!("  ({})", herdr_relay::names::display(&host.name))
+                        };
+                        println!(
+                            "{}  {}{name}",
+                            host.identity,
+                            herdr_relay::names::display(&host.alias)
+                        );
+                    }
+                }
+                HostsAction::Remove { host, origin } => {
+                    let origin = paired_origin(&profile, &origin)?;
+                    let removed = herdr_relay::hosts::remove(&profile, &origin, &host)?;
+                    println!(
+                        "Removed {}. Pair again with a new link to regain access; the host can revoke this device with peers revoke.",
+                        herdr_relay::names::display(&removed.alias)
+                    );
+                }
+            }
+            Ok(())
+        }
         Action::Update {
             check,
             restart_service,
@@ -728,7 +782,14 @@ async fn run(cli: Cli) -> Result<()> {
                         "One-time invitation {} expires at {} (Unix time). Grants access to all explicitly shared instances.",
                         invitation.invitation_id, invitation.expires_at
                     );
-                    println!("{}", invitation.encode()?);
+                    // The link also carries this computer's name for the client.
+                    println!(
+                        "{}",
+                        herdr_relay::names::PairLink::encode(
+                            invitation,
+                            herdr_relay::names::hostname()
+                        )?
+                    );
                 }
                 PairAction::Accept {
                     local_socket,
@@ -807,6 +868,15 @@ async fn run(cli: Cli) -> Result<()> {
             herdr_relay::client::run_local(target, &herdr, &reattach).await
         }
     }
+}
+
+/// The origin a profile is paired with when the default was not overridden.
+fn paired_origin(profile: &std::path::Path, origin: &str) -> Result<String> {
+    Ok(if origin == DEFAULT_RELAY_ORIGIN {
+        herdr_relay::pairing::Store::saved_origin(profile)?.unwrap_or_else(|| origin.to_owned())
+    } else {
+        origin.to_owned()
+    })
 }
 
 fn configure(action: ConfigAction, current: &herdr_relay::config::Config) -> Result<()> {
@@ -1234,6 +1304,23 @@ mod tests {
         assert!(
             matches!(cli.command, Some(Action::Serve { ref origin, .. }) if origin == "https://flag.example")
         );
+    }
+
+    #[test]
+    fn host_commands_parse() {
+        let empty = herdr_relay::config::Config::default();
+        assert!(matches!(
+            try_parse_with(["herdr-relay", "hosts", "list"], &empty)
+                .unwrap()
+                .command,
+            Some(Action::Hosts {
+                action: HostsAction::List { .. }
+            })
+        ));
+        assert!(matches!(
+            try_parse_with(["herdr-relay", "hosts", "remove", "ubuntu"], &empty).unwrap().command,
+            Some(Action::Hosts { action: HostsAction::Remove { ref host, .. } }) if host == "ubuntu"
+        ));
     }
 
     #[test]

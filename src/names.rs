@@ -19,12 +19,43 @@ pub fn valid_name(value: &str) -> bool {
             c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
         })
 }
+/// This computer's friendly name: the macOS computer name (as in Sharing
+/// settings, stable across networks), otherwise the hostname without a
+/// link-local suffix such as `.local`.
 pub fn hostname() -> String {
-    hostname::get()
-        .ok()
-        .and_then(|n| n.into_string().ok())
-        .filter(|n| valid_name(n))
+    computer_name()
+        .or_else(|| {
+            hostname::get()
+                .ok()
+                .and_then(|n| n.into_string().ok())
+                .and_then(|n| friendly(&n))
+        })
         .unwrap_or_else(|| "My computer".into())
+}
+#[cfg(target_os = "macos")]
+fn computer_name() -> Option<String> {
+    let output = std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    friendly(String::from_utf8(output.stdout).ok()?.trim())
+}
+#[cfg(not(target_os = "macos"))]
+fn computer_name() -> Option<String> {
+    None
+}
+/// A displayable name with `.local`, `.localdomain` or `.lan` removed.
+pub fn friendly(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let lower = raw.to_ascii_lowercase();
+    let name = [".local", ".localdomain", ".lan"]
+        .iter()
+        .find(|suffix| lower.ends_with(*suffix))
+        .map_or(raw, |suffix| &raw[..raw.len() - suffix.len()]);
+    valid_name(name).then(|| name.to_owned())
 }
 pub fn display(value: &str) -> String {
     value
@@ -110,7 +141,7 @@ fn invalid() -> Error {
     )
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostName {
     pub origin: String,
@@ -232,18 +263,7 @@ fn remember_in(
     name: Option<&str>,
     alias: Option<&str>,
 ) -> Result<HostName> {
-    crate::identity::private_directory(profile, false)?;
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(profile.join(book.lock))
-        .map_err(storage)?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(storage(std::io::Error::last_os_error()));
-    }
+    let _lock = lock(profile, book)?;
     let mut records = read(profile, book)?;
     // An empty alias resets to the automatic, name-derived alias.
     if name.is_some_and(|n| !valid_name(n))
@@ -300,7 +320,45 @@ fn remember_in(
     } else {
         records.push(record.clone());
     }
-    let bytes = serde_json::to_vec(&records)
+    write(profile, book, &records)?;
+    Ok(record)
+}
+
+/// Remove a host's saved name and alias.
+pub fn forget(profile: &Path, origin: &str, identity: &str) -> Result<()> {
+    let _lock = lock(profile, HOSTS)?;
+    let mut records = read(profile, HOSTS)?;
+    let before = records.len();
+    records.retain(|r| !(r.origin == origin && r.identity == identity));
+    if records.len() != before {
+        write(profile, HOSTS, &records)?;
+    }
+    Ok(())
+}
+
+/// The saved host names, for listing.
+pub fn hosts(profile: &Path) -> Result<Vec<HostName>> {
+    read(profile, HOSTS)
+}
+
+fn lock(profile: &Path, book: Book) -> Result<File> {
+    crate::identity::private_directory(profile, false)?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(profile.join(book.lock))
+        .map_err(storage)?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(storage(std::io::Error::last_os_error()));
+    }
+    Ok(lock)
+}
+
+fn write(profile: &Path, book: Book, records: &[HostName]) -> Result<()> {
+    let bytes = serde_json::to_vec(records)
         .map_err(|_| Error::new("HOST_NAMES", "cannot save host names"))?;
     if bytes.len() > 65536 || records.len() > 256 {
         return Err(Error::new("HOST_NAMES", "too many saved host labels"));
@@ -320,7 +378,7 @@ fn remember_in(
     File::open(profile)
         .and_then(|f| f.sync_all())
         .map_err(storage)?;
-    Ok(record)
+    Ok(())
 }
 fn storage(error: std::io::Error) -> Error {
     Error::new("HOST_NAMES", error.to_string())
@@ -329,6 +387,31 @@ fn storage(error: std::io::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reported_names_drop_local_network_suffixes() {
+        assert_eq!(
+            friendly("Hackerchais-MacBook-Pro-2023.local").as_deref(),
+            Some("Hackerchais-MacBook-Pro-2023")
+        );
+        assert_eq!(friendly("box.localdomain").as_deref(), Some("box"));
+        assert_eq!(friendly("nas.LAN").as_deref(), Some("nas"));
+        assert_eq!(
+            friendly("herdr-relay-demo").as_deref(),
+            Some("herdr-relay-demo")
+        );
+        // A real domain name is kept; only link-local suffixes are noise.
+        assert_eq!(
+            friendly("build.example.com").as_deref(),
+            Some("build.example.com")
+        );
+        assert_eq!(
+            friendly("Hackerchai's MacBook Pro 2023").as_deref(),
+            Some("Hackerchai's MacBook Pro 2023")
+        );
+        for bad in ["", "  ", ".local", "evil\x1b[2J"] {
+            assert_eq!(friendly(bad), None, "{bad:?}");
+        }
+    }
     #[test]
     fn names_are_stable_distinct_and_cannot_contain_terminal_commands() {
         let temp = tempfile::Builder::new()

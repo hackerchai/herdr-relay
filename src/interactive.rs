@@ -101,6 +101,30 @@ fn discover(config: &Path, existing: &[Definition]) -> Vec<Session> {
 }
 
 pub async fn serve(profile: &Path, origin: &str, config: &Path) -> Result<()> {
+    crate::update::spawn_check(profile);
+    let result = serve_in(profile, origin, config).await;
+    remind_update(profile);
+    result
+}
+
+/// After a menu closes, repeat the update prompt on the terminal.
+fn remind_update(profile: &Path) {
+    use std::io::IsTerminal;
+    if let Some(notice) = crate::update::prompt(profile)
+        && std::io::stderr().is_terminal()
+    {
+        eprintln!("{notice}");
+    }
+}
+
+/// The update prompt as an extra hint line.
+fn update_line(profile: &Path) -> String {
+    crate::update::prompt(profile)
+        .map(|n| format!("\n{n}"))
+        .unwrap_or_default()
+}
+
+async fn serve_in(profile: &Path, origin: &str, config: &Path) -> Result<()> {
     let saved = crate::pairing::Store::saved_origin(profile)?;
     let origin = if origin == DEFAULT_ORIGIN {
         saved.as_deref().unwrap_or(origin)
@@ -145,8 +169,9 @@ pub async fn serve(profile: &Path, origin: &str, config: &Path) -> Result<()> {
                 &rows,
                 selected,
                 &format!(
-                    "{hint}\nStart at login: {} (a toggles)\nSleep protection: automatic while serving (? for lid-close limits)",
-                    if autostart { "on" } else { "off" }
+                    "{hint}\nStart at login: {} (a toggles)\nSleep protection: automatic while serving (? for lid-close limits){}",
+                    if autostart { "on" } else { "off" },
+                    update_line(profile)
                 ),
                 "Space Select    Enter Apply    a Autostart    r Refresh    ? Help    Esc Exit",
             )?;
@@ -275,7 +300,7 @@ async fn invitation_screen(screen: &mut Screen, profile: &Path) -> Result<Option
                     screen.message("Sleep protection", &format!("{power}\n\nMacBook closed-display use needs power, an external display and input devices.\nA VM cannot keep its physical host awake.\nStop the service to release locks. Details: herdr-relay serve --help.")).await?;
                 },
                 Choice::Pick(_) | Choice::Back => return Ok(None),
-                Choice::Rename(_) => {},
+                Choice::Rename(_) | Choice::Delete(_) => {},
             }
         }
     }
@@ -367,16 +392,36 @@ async fn pair_in(
 }
 
 pub async fn pair(profile: &Path, herdr: &Path) -> Result<()> {
+    crate::update::spawn_check(profile);
+    let result = pair_and_connect(profile, herdr).await;
+    remind_update(profile);
+    result
+}
+
+async fn pair_and_connect(profile: &Path, herdr: &Path) -> Result<()> {
     let mut screen = Screen::new()?;
     let paired = pair_in(&mut screen, profile, None).await?;
     drop(screen);
     if let Some((origin, identity)) = paired {
-        connect(profile, &origin, herdr, Some(identity), None).await?;
+        connect_in(profile, &origin, herdr, Some(identity), None).await?;
     }
     Ok(())
 }
 
 pub async fn connect(
+    profile: &Path,
+    origin: &str,
+    herdr: &Path,
+    selected_host: Option<String>,
+    local: Option<&str>,
+) -> Result<()> {
+    crate::update::spawn_check(profile);
+    let result = connect_in(profile, origin, herdr, selected_host, local).await;
+    remind_update(profile);
+    result
+}
+
+async fn connect_in(
     profile: &Path,
     origin: &str,
     herdr: &Path,
@@ -465,7 +510,10 @@ pub async fn connect(
                 .choose_live(
                     "Choose a host",
                     &rows,
-                    "Select a host to browse its shared Herdr sessions. Aliases are saved locally.",
+                    &format!(
+                        "Select a host to browse its shared Herdr sessions. Aliases are saved locally.{}",
+                        update_line(profile)
+                    ),
                     true,
                     Some(&mut rx),
                 )
@@ -477,6 +525,21 @@ pub async fn connect(
                 Choice::Rename(i) if i < hosts.len() => {
                     if let Some(alias) = screen.input("Rename host", "Choose a unique local alias. This does not change the host's identity or authorization.", false).await?
                         && let Err(e) = names::remember(profile, &origin, &hosts[i].identity, None, Some(&alias)) { screen.message("Could not rename", &e.to_string()).await?; }
+                    continue;
+                }
+                Choice::Delete(i) if i < hosts.len() => {
+                    let host = &hosts[i];
+                    let rows = vec![
+                        format!("Remove {}", names::display(&host.alias)),
+                        "Cancel".into(),
+                    ];
+                    let detail = "This device forgets the host and its access. Pairing again needs a new link. The host can also revoke this device with peers revoke.";
+                    if let Choice::Pick(0) =
+                        screen.choose("Remove host", &rows, detail, false).await?
+                        && let Err(e) = crate::hosts::remove(profile, &origin, &host.identity)
+                    {
+                        screen.message("Could not remove", &e.to_string()).await?;
+                    }
                     continue;
                 }
                 Choice::Pick(i) if i < hosts.len() => Some(hosts[i].clone()),
