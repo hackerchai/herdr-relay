@@ -4,13 +4,15 @@
 Run from relay/ (for Wrangler) after the GitHub Release is final. Versioned
 files are uploaded first; `latest/herdr-relay-update.json` is uploaded last, so
 the updater never sees a version whose archives are missing. Retries upload the
-same bytes again. `--check` only confirms the bucket is reachable.
+same bytes again. `--check` writes a small marker object, proving that the
+credentials can publish (they are scoped to this bucket's objects only).
 """
 import hashlib
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 BUCKET = 'herdr-relay-dl'
 MANIFEST = 'herdr-relay-update.json'
@@ -43,7 +45,12 @@ def wrangler(*args):
 
 def main():
     if sys.argv[1:] == ['--check']:
-        wrangler('r2', 'bucket', 'info', BUCKET)
+        with tempfile.NamedTemporaryFile('w', suffix='.txt') as marker:
+            marker.write('publish check\n')
+            marker.flush()
+            wrangler('r2', 'object', 'put', f'{BUCKET}/preflight/check.txt', '--remote',
+                     '--file', marker.name, '--content-type', 'text/plain',
+                     '--cache-control', 'no-store')
         return
     directory = Path(sys.argv[1] if len(sys.argv) > 1 else '../target/packages')
     for key, path, cache in plan(directory):
