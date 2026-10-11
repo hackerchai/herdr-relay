@@ -24,6 +24,9 @@ fn settings_round_trip_through_a_private_file() {
     config.set("herdr", "/opt/herdr/bin/herdr", None).unwrap();
     config.set("profile", "/var/relay-profile", None).unwrap();
     config.set("update-repository", "me/fork", None).unwrap();
+    config
+        .set("update-url", "https://mirror.example.org", None)
+        .unwrap();
     config.set("direct", "off", None).unwrap();
     config.set("direct-port", "47999", None).unwrap();
     config.set("token", TOKEN, Some(ORIGIN)).unwrap();
@@ -43,6 +46,10 @@ fn settings_round_trip_through_a_private_file() {
     assert_eq!(loaded, config);
     assert_eq!(loaded.origin.as_deref(), Some(ORIGIN));
     assert_eq!(loaded.direct, Some(false));
+    assert_eq!(
+        loaded.update_url.as_deref(),
+        Some("https://mirror.example.org")
+    );
     assert_eq!(loaded.direct_port, Some(47999));
     assert_eq!(loaded.token(ORIGIN), Some(TOKEN));
     assert_eq!(loaded.token("https://other.example"), None);
@@ -71,6 +78,8 @@ fn invalid_settings_are_refused() {
         ("direct-port", "0"),
         ("direct-port", "70000"),
         ("update-repository", "not a repository"),
+        ("update-url", "http://mirror.example.org"),
+        ("update-url", "https://mirror.example.org/path"),
         ("colour", "blue"),
     ] {
         assert!(config.set(key, value, None).is_err(), "{key}={value}");

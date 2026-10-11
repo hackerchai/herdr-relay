@@ -22,6 +22,7 @@ pub const KEYS: &[&str] = &[
     "profile",
     "herdr",
     "update-repository",
+    "update-url",
     "direct",
     "direct-port",
     "token",
@@ -38,6 +39,9 @@ pub struct Config {
     pub herdr: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_repository: Option<String>,
+    /// The release download site tried before GitHub Releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_url: Option<String>,
     /// Whether a host started with this configuration listens for direct connections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct: Option<bool>,
@@ -104,6 +108,7 @@ impl Config {
             "profile" => next.profile = Some(PathBuf::from(value)),
             "herdr" => next.herdr = Some(PathBuf::from(value)),
             "update-repository" => next.update_repository = Some(value.to_owned()),
+            "update-url" => next.update_url = Some(value.to_owned()),
             "direct" => {
                 next.direct = Some(match value {
                     "on" | "true" | "yes" => true,
@@ -138,6 +143,7 @@ impl Config {
             "profile" => self.profile = None,
             "herdr" => self.herdr = None,
             "update-repository" => self.update_repository = None,
+            "update-url" => self.update_url = None,
             "direct" => self.direct = None,
             "direct-port" => self.direct_port = None,
             "token" => {
@@ -172,6 +178,7 @@ impl Config {
             self.herdr.as_ref().map(|p| p.display().to_string()),
         );
         line("update-repository", self.update_repository.clone());
+        line("update-url", self.update_url.clone());
         line(
             "direct",
             self.direct.map(|on| if on { "on" } else { "off" }.into()),
@@ -206,6 +213,10 @@ impl Config {
                     "update-repository is a GitHub owner/repository name",
                 ));
             }
+        }
+        if let Some(url) = &self.update_url {
+            crate::pairing::validate_origin(url)
+                .map_err(|_| setting("update-url must be an exact https:// origin"))?;
         }
         if self.direct_port == Some(0) {
             return Err(setting("direct-port is a TCP port from 1 to 65535"));

@@ -15,7 +15,16 @@ use std::{
 
 const LIMIT: usize = 128 * 1024 * 1024;
 const MANIFEST: &str = "herdr-relay-update.json";
-const REPOSITORY: &str = "hackerchai/herdr-relay-releases";
+/// Releases of the public source repository carry the update manifest.
+const REPOSITORY: &str = "hackerchai/herdr-relay";
+/// The release download site (Cloudflare R2), tried before GitHub Releases.
+const SITE: &str = "https://herdr-relay-dl.hackerchai.com";
+
+/// The repository to update from and whether it may need GitHub credentials.
+fn source(repository: Option<&str>) -> (&str, bool) {
+    let repository = repository.unwrap_or(REPOSITORY);
+    (repository, repository != REPOSITORY)
+}
 
 #[derive(Deserialize)]
 struct Asset {
@@ -29,14 +38,14 @@ struct Release {
     prerelease: bool,
     assets: Vec<Asset>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
     schema: u8,
     version: String,
     artifacts: Vec<Artifact>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 struct Artifact {
     target: String,
@@ -171,48 +180,153 @@ impl GitHub {
     }
 }
 
+/// Where to look for releases, in order.
+#[derive(Debug, PartialEq, Eq)]
+enum Source {
+    /// A download site serving `latest/` and `v{version}/` paths.
+    Site(String),
+    /// GitHub Releases of an owner/repository.
+    GitHub(String),
+}
+
+fn sources(site: Option<&str>, repository: Option<&str>) -> Result<Vec<Source>> {
+    if repository.is_some() {
+        let (repository, _) = source(repository);
+        return Ok(vec![Source::GitHub(repository.to_owned())]);
+    }
+    let site = site.unwrap_or(SITE);
+    Site::new(site)?;
+    Ok(vec![
+        Source::Site(site.to_owned()),
+        Source::GitHub(REPOSITORY.to_owned()),
+    ])
+}
+
+/// The release download site: an HTTPS origin (loopback HTTP for tests).
+struct Site {
+    base: String,
+    client: reqwest::Client,
+}
+impl Site {
+    fn new(base: &str) -> Result<Self> {
+        let url = url::Url::parse(base).map_err(|_| site_invalid())?;
+        let loopback = url.scheme() == "http" && url.host_str() == Some("127.0.0.1");
+        if !(url.scheme() == "https" || loopback)
+            || url.origin().ascii_serialization() != base
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(site_invalid());
+        }
+        let client = reqwest::Client::builder()
+            .user_agent("herdr-relay-updater")
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(network)?;
+        Ok(Self {
+            base: base.to_owned(),
+            client,
+        })
+    }
+    async fn get(&self, path: &str, limit: usize) -> Result<Vec<u8>> {
+        let mut response = self
+            .client
+            .get(format!("{}/{path}", self.base))
+            .send()
+            .await
+            .map_err(network)?;
+        if !response.status().is_success() {
+            return Err(Error::new(
+                "UPDATE_DOWNLOAD",
+                format!("download site returned HTTP {}", response.status().as_u16()),
+            ));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(network)? {
+            if body.len() + chunk.len() > limit {
+                return Err(invalid());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+    async fn manifest(&self) -> Result<Manifest> {
+        serde_json::from_slice(&self.get(&format!("latest/{MANIFEST}"), 65536).await?)
+            .map_err(|_| invalid())
+    }
+    async fn archive(&self, version: &str, asset: &str) -> Result<Vec<u8>> {
+        self.get(&format!("v{version}/{asset}"), LIMIT).await
+    }
+}
+fn site_invalid() -> Error {
+    Error::new(
+        "UPDATE_SOURCE",
+        "the update download site must be an exact https:// origin",
+    )
+}
+
+/// What a source offered: nothing to do, or a verified binary to install.
+enum Fetched {
+    Done,
+    Install { version: String, binary: Vec<u8> },
+}
+
 pub async fn run(
     profile: &Path,
     check_only: bool,
     restart_service: bool,
     repository: Option<&str>,
+    site: Option<&str>,
 ) -> Result<()> {
-    let repository = repository.unwrap_or(REPOSITORY);
-    let parts: Vec<_> = repository.split('/').collect();
-    if parts.len() != 2
-        || parts.iter().any(|p| {
-            p.is_empty()
-                || !p
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
-        })
-    {
-        return Err(Error::new(
-            "UPDATE_REPOSITORY",
-            "use a GitHub owner/repository name",
-        ));
+    let mut failure = None;
+    for source in sources(site, repository)? {
+        let fetched = match &source {
+            Source::Site(base) => {
+                println!("Checking the download site ({base})…");
+                fetch_site(profile, check_only, restart_service, base).await
+            }
+            Source::GitHub(repository) => {
+                println!("Checking GitHub Releases ({repository})…");
+                fetch_github(profile, check_only, restart_service, repository).await
+            }
+        };
+        match fetched {
+            Ok(Fetched::Done) => return Ok(()),
+            Ok(Fetched::Install { version, binary }) => {
+                return install(profile, &version, &binary, restart_service).await;
+            }
+            // Nothing was changed yet, so the next source can be tried.
+            Err(error) if matches!(source, Source::Site(_)) => {
+                println!(
+                    "Download site unavailable ({}); trying GitHub Releases.",
+                    error.code
+                );
+                failure = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
     }
-    let github = GitHub::new(repository != REPOSITORY).await?;
-    println!("Checking GitHub Releases ({repository})…");
-    let bytes = github
-        .get(
-            &format!("https://api.github.com/repos/{repository}/releases?per_page=100"),
-            false,
-            4 * 1024 * 1024,
-        )
-        .await?;
-    let releases: Vec<Release> = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    let release = select(&releases)?;
-    let version = release.tag_name.strip_prefix('v').ok_or_else(invalid)?;
+    Err(failure.unwrap_or_else(invalid))
+}
+
+/// Report the versions; `None` means nothing needs installing.
+async fn decide(
+    profile: &Path,
+    check_only: bool,
+    restart_service: bool,
+    version: &str,
+) -> Result<Option<()>> {
     let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|_| invalid())?;
     let latest = semver::Version::parse(version).map_err(|_| invalid())?;
     println!("Current: {current}; latest complete stable release: {latest}.");
     if check_only {
-        return Ok(());
+        return Ok(None);
     }
     if latest < current {
         println!("The installed version is newer; no downgrade performed.");
-        return Ok(());
+        return Ok(None);
     }
     if latest == current
         && !restart_service
@@ -221,16 +335,13 @@ pub async fn run(
         println!(
             "Already up to date. Use --restart-service to also apply a pending server update."
         );
-        return Ok(());
+        return Ok(None);
     }
-    let manifest_asset = release
-        .assets
-        .iter()
-        .find(|a| a.name == MANIFEST)
-        .ok_or_else(invalid)?;
-    let manifest: Manifest =
-        serde_json::from_slice(&github.get(&manifest_asset.url, true, 65536).await?)
-            .map_err(|_| invalid())?;
+    Ok(Some(()))
+}
+
+/// This platform's artifact in a manifest for `version`.
+fn artifact<'a>(manifest: &'a Manifest, version: &str) -> Result<&'a Artifact> {
     if manifest.schema != 1 || manifest.version != version || manifest.artifacts.len() != 4 {
         return Err(invalid());
     }
@@ -245,6 +356,82 @@ pub async fn run(
     {
         return Err(invalid());
     }
+    Ok(artifact)
+}
+
+async fn fetch_site(
+    profile: &Path,
+    check_only: bool,
+    restart_service: bool,
+    base: &str,
+) -> Result<Fetched> {
+    let site = Site::new(base)?;
+    let manifest = site.manifest().await?;
+    let version = manifest.version.clone();
+    semver::Version::parse(&version)
+        .ok()
+        .filter(|v| v.pre.is_empty())
+        .ok_or_else(invalid)?;
+    if decide(profile, check_only, restart_service, &version)
+        .await?
+        .is_none()
+    {
+        return Ok(Fetched::Done);
+    }
+    let artifact = artifact(&manifest, &version)?;
+    println!("Downloading {}…", artifact.asset);
+    let archive = site.archive(&version, &artifact.asset).await?;
+    let binary = verified_binary(&archive, artifact, &version)?;
+    Ok(Fetched::Install { version, binary })
+}
+
+async fn fetch_github(
+    profile: &Path,
+    check_only: bool,
+    restart_service: bool,
+    repository: &str,
+) -> Result<Fetched> {
+    let parts: Vec<_> = repository.split('/').collect();
+    if parts.len() != 2
+        || parts.iter().any(|p| {
+            p.is_empty()
+                || !p
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+        })
+    {
+        return Err(Error::new(
+            "UPDATE_REPOSITORY",
+            "use a GitHub owner/repository name",
+        ));
+    }
+    let (_, authenticated) = source(Some(repository));
+    let github = GitHub::new(authenticated).await?;
+    let bytes = github
+        .get(
+            &format!("https://api.github.com/repos/{repository}/releases?per_page=100"),
+            false,
+            4 * 1024 * 1024,
+        )
+        .await?;
+    let releases: Vec<Release> = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let release = select(&releases)?;
+    let version = release.tag_name.strip_prefix('v').ok_or_else(invalid)?;
+    if decide(profile, check_only, restart_service, version)
+        .await?
+        .is_none()
+    {
+        return Ok(Fetched::Done);
+    }
+    let manifest_asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == MANIFEST)
+        .ok_or_else(invalid)?;
+    let manifest: Manifest =
+        serde_json::from_slice(&github.get(&manifest_asset.url, true, 65536).await?)
+            .map_err(|_| invalid())?;
+    let artifact = artifact(&manifest, version)?;
     let asset = release
         .assets
         .iter()
@@ -253,6 +440,18 @@ pub async fn run(
     println!("Downloading {}…", artifact.asset);
     let archive = github.get(&asset.url, true, LIMIT).await?;
     let binary = verified_binary(&archive, artifact, version)?;
+    Ok(Fetched::Install {
+        version: version.to_owned(),
+        binary,
+    })
+}
+
+async fn install(
+    profile: &Path,
+    version: &str,
+    binary: &[u8],
+    restart_service: bool,
+) -> Result<()> {
     let executable =
         fs::canonicalize(std::env::current_exe().map_err(storage)?).map_err(storage)?;
     if executable
@@ -292,7 +491,7 @@ pub async fn run(
         .set_permissions(fs::Permissions::from_mode(meta.mode() & 0o777))
         .map_err(storage)?;
     stage
-        .write_all(&binary)
+        .write_all(binary)
         .and_then(|_| stage.as_file().sync_all())
         .map_err(storage)?;
     let stage = stage.into_temp_path();
@@ -321,7 +520,7 @@ pub async fn run(
     fs::File::open(parent)
         .and_then(|f| f.sync_all())
         .map_err(storage)?;
-    match crate::user_service::upgrade(profile, &binary, restart_service).await {
+    match crate::user_service::upgrade(profile, binary, restart_service).await {
         Ok(message) => println!("Updated to {version}. {message}"),
         Err(error) => {
             write_atomic(&executable, &old, meta.mode() & 0o777)?;
@@ -417,6 +616,114 @@ fn storage(error: std::io::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_download_site_comes_first_and_github_releases_are_the_fallback() {
+        assert_eq!(
+            sources(None, None).unwrap(),
+            vec![
+                Source::Site(SITE.into()),
+                Source::GitHub("hackerchai/herdr-relay".into())
+            ]
+        );
+        assert_eq!(
+            sources(Some("https://mirror.example.org"), None).unwrap(),
+            vec![
+                Source::Site("https://mirror.example.org".into()),
+                Source::GitHub("hackerchai/herdr-relay".into())
+            ]
+        );
+        // A custom repository is used alone.
+        assert_eq!(
+            sources(None, Some("me/fork")).unwrap(),
+            vec![Source::GitHub("me/fork".into())]
+        );
+        for bad in [
+            "http://mirror.example.org",
+            "https://x.example/path",
+            "ftp://x",
+        ] {
+            assert_eq!(
+                sources(Some(bad), None).unwrap_err().code,
+                "UPDATE_SOURCE",
+                "{bad}"
+            );
+        }
+        assert!(sources(Some("http://127.0.0.1:9"), None).is_ok());
+    }
+
+    /// Serve fixed paths once each over loopback HTTP; anything else is 404.
+    async fn site(files: Vec<(&'static str, Vec<u8>)>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut head = Vec::new();
+                let mut byte = [0];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if socket.read_exact(&mut byte).await.is_err() {
+                        break;
+                    }
+                    head.push(byte[0]);
+                }
+                let line = String::from_utf8_lossy(&head).to_string();
+                let path = line.split(' ').nth(1).unwrap_or("").to_owned();
+                let (status, body) = match files.iter().find(|(p, _)| *p == path) {
+                    Some((_, body)) => ("200 OK", body.clone()),
+                    None => ("404 Not Found", Vec::new()),
+                };
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(&body).await;
+            }
+        });
+        base
+    }
+
+    #[tokio::test]
+    async fn the_download_site_serves_the_latest_manifest_and_versioned_archives() {
+        let manifest = serde_json::json!({"schema":1,"version":"9.9.9","artifacts":[]});
+        let base = site(vec![
+            (
+                "/latest/herdr-relay-update.json",
+                manifest.to_string().into_bytes(),
+            ),
+            ("/v9.9.9/herdr-relay-9.9.9-x.tar.gz", b"archive".to_vec()),
+        ])
+        .await;
+        let site = Site::new(&base).unwrap();
+        assert_eq!(site.manifest().await.unwrap().version, "9.9.9");
+        assert_eq!(
+            site.archive("9.9.9", "herdr-relay-9.9.9-x.tar.gz")
+                .await
+                .unwrap(),
+            b"archive"
+        );
+        assert_eq!(
+            site.archive("9.9.9", "missing.tar.gz")
+                .await
+                .unwrap_err()
+                .code,
+            "UPDATE_DOWNLOAD"
+        );
+        // An unreachable site is an ordinary download failure, so GitHub is tried next.
+        let down = Site::new("http://127.0.0.1:9").unwrap();
+        assert_eq!(down.manifest().await.unwrap_err().code, "UPDATE_NETWORK");
+    }
+    #[test]
+    fn updates_come_from_the_public_source_repository_without_a_login() {
+        assert_eq!(source(None), ("hackerchai/herdr-relay", false));
+        // Any other repository, including the retired binary channel, is a
+        // custom source that may need credentials.
+        assert_eq!(
+            source(Some("hackerchai/herdr-relay-releases")),
+            ("hackerchai/herdr-relay-releases", true)
+        );
+        assert_eq!(source(Some("me/fork")), ("me/fork", true));
+    }
     #[test]
     fn newest_complete_stable_release_wins_over_drafts_and_partial_uploads() {
         let releases: Vec<Release> = serde_json::from_value(serde_json::json!([

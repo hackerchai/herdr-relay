@@ -1,7 +1,7 @@
 # Install Herdr Relay
 
-Download native archives from the [public releases](https://github.com/hackerchai/herdr-relay-releases/releases/latest)
-without a GitHub login, or install from crates.io.
+Download native archives from [GitHub Releases](https://github.com/hackerchai/herdr-relay/releases/latest) or the
+[download site](#download-site) without a login, or install from crates.io.
 Install a published CLI release with Rust 1.99 or newer:
 
 ```sh
@@ -48,15 +48,39 @@ on the client. Paste the link and use the hostname/session menus. See the
 and explicit administration.
 
 `herdr-relay update --check` checks without installing. `herdr-relay update`
-installs a complete stable GitHub Release for the running executable's OS and
-architecture (including x86_64 under Rosetta). The updater preserves a previous
+installs the latest complete stable release for the running executable's OS and
+architecture (including x86_64 under Rosetta). It downloads from the
+[download site](#download-site) first and falls back to GitHub Releases if the
+site is unreachable or serves anything that fails verification. The updater preserves a previous
 binary for recovery, updates the service copy, and keeps stopped services stopped.
 An active session defers the service update until stop/start; add
 `--restart-service` to explicitly restart immediately. The default public channel
 needs no GitHub login. An explicit `--repository OWNER/REPO` can select another
 channel; private alternatives use the caller's own `gh auth login` or `GH_TOKEN`.
+An explicit repository skips the download site. `--download-url`,
+`HERDR_RELAY_UPDATE_URL` or `config set update-url` select another download
+site (an exact `https://` origin with the same layout).
 The public source-install alternative is `cargo install herdr-relay --locked --force`.
 Externally managed installations must be upgraded using their package manager.
+
+### Download site
+
+Every release is also served from Cloudflare R2 at
+`https://herdr-relay-dl.hackerchai.com`, which is usually much faster than
+GitHub in mainland China:
+
+```sh
+version=$(curl -fsSL https://herdr-relay-dl.hackerchai.com/latest/herdr-relay-update.json \
+  | sed -n 's/.*"version": "\([^"]*\)".*/\1/p')
+target=aarch64-apple-darwin   # or x86_64-apple-darwin, aarch64/x86_64-unknown-linux-musl
+curl -fLO "https://herdr-relay-dl.hackerchai.com/v$version/herdr-relay-$version-$target.tar.gz"
+curl -fLO "https://herdr-relay-dl.hackerchai.com/v$version/herdr-relay-$version-$target.tar.gz.sha256"
+shasum -a 256 -c "herdr-relay-$version-$target.tar.gz.sha256"
+```
+
+`latest/herdr-relay-update.json` names the current version and each archive's
+SHA-256; versioned files never change. The updater verifies every archive
+against that manifest whichever source it came from.
 
 ## macOS user service
 

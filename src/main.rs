@@ -115,6 +115,9 @@ enum Action {
         /// GitHub owner/repository hosting release assets.
         #[arg(long, env = "HERDR_RELAY_UPDATE_REPOSITORY")]
         repository: Option<String>,
+        /// Release download site tried before GitHub Releases (exact https:// origin).
+        #[arg(long, env = "HERDR_RELAY_UPDATE_URL")]
+        download_url: Option<String>,
     },
     /// Run the Relay service without a terminal (used by service managers).
     #[command(hide = true)]
@@ -431,6 +434,7 @@ where
             "HERDR_RELAY_UPDATE_REPOSITORY",
             config.update_repository.clone(),
         ),
+        ("HERDR_RELAY_UPDATE_URL", config.update_url.clone()),
     ]
     .into_iter()
     .filter_map(|(name, value)| Some((name, value?)))
@@ -471,9 +475,17 @@ async fn run(cli: Cli) -> Result<()> {
             check,
             restart_service,
             repository,
+            download_url,
         } => {
             let profile = cli.profile.map(Ok).unwrap_or_else(profile_dir)?;
-            herdr_relay::update::run(&profile, check, restart_service, repository.as_deref()).await
+            herdr_relay::update::run(
+                &profile,
+                check,
+                restart_service,
+                repository.as_deref(),
+                download_url.as_deref(),
+            )
+            .await
         }
         Action::Daemon {
             origin,
@@ -1162,6 +1174,9 @@ mod tests {
         config.set("herdr", "/file/herdr", None).unwrap();
         config.set("profile", "/file/profile", None).unwrap();
         config.set("update-repository", "file/fork", None).unwrap();
+        config
+            .set("update-url", "https://file-mirror.example", None)
+            .unwrap();
         let cli = try_parse_with(["herdr-relay", "targets", "--host", "x"], &config).unwrap();
         assert_eq!(
             cli.profile.as_deref(),
@@ -1176,7 +1191,9 @@ mod tests {
         );
         let cli = try_parse_with(["herdr-relay", "update"], &config).unwrap();
         assert!(
-            matches!(cli.command, Some(Action::Update { ref repository, .. }) if repository.as_deref() == Some("file/fork"))
+            matches!(cli.command, Some(Action::Update { ref repository, ref download_url, .. })
+                if repository.as_deref() == Some("file/fork")
+                    && download_url.as_deref() == Some("https://file-mirror.example"))
         );
         assert!(
             matches!(default_action(&config), Action::Connect { ref origin, ref herdr, .. }

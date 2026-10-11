@@ -38,8 +38,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
-      - name: Check public release artifact selection
-        run: python3 scripts/test-public-release.py
+      - name: Check the download site upload plan
+        run: python3 scripts/test-download-site.py
       - run: cargo package --locked --allow-dirty
 
   typescript:
