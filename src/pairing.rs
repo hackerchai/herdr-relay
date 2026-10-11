@@ -416,6 +416,16 @@ impl Store {
             Ok(state.grant_serial)
         })
     }
+    /// Stop accessing a host: drop this device's outgoing grant for it.
+    pub fn forget_host(&self, device: &str) -> Result<()> {
+        self.transaction(|state| {
+            if !state.outgoing.iter().any(|g| g.device_id == device) {
+                return Err(Error::new("HOST_UNKNOWN", "no paired host matches"));
+            }
+            state.outgoing.retain(|g| g.device_id != device);
+            Ok(())
+        })
+    }
     pub fn grants(&self) -> Result<Grants> {
         let state = self.read_state()?;
         Ok(Grants {

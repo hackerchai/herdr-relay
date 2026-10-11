@@ -71,7 +71,10 @@ herdr-relay
 ```
 
 这与 `herdr-relay connect` 相同，会打开主机和会话选择菜单。
-按 `?` 或 F1 看帮助，`/` 搜索，`r` 刷新，Esc 返回；主机菜单按 `a` 可以改本地别名。
+按 `?` 或 F1 看帮助，`/` 搜索，`r` 刷新，Esc 返回；主机菜单按 `a` 可以改本地别名，
+按 `d` 删除不再使用的主机（也可以用 `herdr-relay hosts list` / `herdr-relay hosts remove 名称`）。
+主机默认以电脑名命名（macOS 上是"共享"设置里的电脑名）。删除只在本机生效：
+重新访问需要新的配对链接，主机端可用 `herdr-relay peers revoke` 撤销本设备。
 
 在 Herdr 内按 **Ctrl-B，松开，再按 Q**，返回 Relay 菜单。
 远端会话和 agent 继续运行。同一个会话同时只允许一个 Relay 客户端；
@@ -97,5 +100,8 @@ Relay 不会自动创建 Herdr 会话；重启后重新启动原来的 Herdr 会
 herdr-relay update
 ```
 
-升级无需 GitHub 登录。活动连接存在时，后台服务的新版本会推迟启用，
+升级无需 GitHub 登录，优先从国内较快的下载站获取，失败时回退到 GitHub Releases。
+Relay 每天自动检查一次新版本（打开菜单时和后台服务中），有新版时菜单里和退出后会提示
+`Update available: … Run herdr-relay update.`。可以用 `herdr-relay config set update-check 6h`
+调整间隔，设为 `off` 关闭。活动连接存在时，后台服务的新版本会推迟启用，
 可以在方便时停止并重新启动服务。详见[安装、服务与升级](install.md)。

@@ -181,6 +181,8 @@ built-in defaults:
 | `profile` | `HERDR_RELAY_PROFILE` | Private state directory |
 | `herdr` | `HERDR_RELAY_HERDR` | Herdr executable |
 | `update-repository` | `HERDR_RELAY_UPDATE_REPOSITORY` | GitHub owner/repository for updates |
+| `update-url` | `HERDR_RELAY_UPDATE_URL` | Release download site tried first |
+| `update-check` | `HERDR_RELAY_UPDATE_CHECK` | Automatic update check interval (`1d` default, `off`) |
 | `direct` (`on`/`off`) | `HERDR_RELAY_DIRECT` | Direct LAN listener of a host |
 | `direct-port` | `HERDR_RELAY_DIRECT_PORT` | Its TCP port |
 | `token` (per origin) | `HERDR_RELAY_TOKEN` | [Access token](#optional-access-token) |

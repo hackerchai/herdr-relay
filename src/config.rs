@@ -23,6 +23,7 @@ pub const KEYS: &[&str] = &[
     "herdr",
     "update-repository",
     "update-url",
+    "update-check",
     "direct",
     "direct-port",
     "token",
@@ -42,6 +43,9 @@ pub struct Config {
     /// The release download site tried before GitHub Releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_url: Option<String>,
+    /// How often to check for updates: `off`, or e.g. `6h`, `1d` (default `1d`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_check: Option<String>,
     /// Whether a host started with this configuration listens for direct connections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct: Option<bool>,
@@ -109,6 +113,7 @@ impl Config {
             "herdr" => next.herdr = Some(PathBuf::from(value)),
             "update-repository" => next.update_repository = Some(value.to_owned()),
             "update-url" => next.update_url = Some(value.to_owned()),
+            "update-check" => next.update_check = Some(value.to_owned()),
             "direct" => {
                 next.direct = Some(match value {
                     "on" | "true" | "yes" => true,
@@ -144,6 +149,7 @@ impl Config {
             "herdr" => self.herdr = None,
             "update-repository" => self.update_repository = None,
             "update-url" => self.update_url = None,
+            "update-check" => self.update_check = None,
             "direct" => self.direct = None,
             "direct-port" => self.direct_port = None,
             "token" => {
@@ -179,6 +185,7 @@ impl Config {
         );
         line("update-repository", self.update_repository.clone());
         line("update-url", self.update_url.clone());
+        line("update-check", self.update_check.clone());
         line(
             "direct",
             self.direct.map(|on| if on { "on" } else { "off" }.into()),
@@ -217,6 +224,11 @@ impl Config {
         if let Some(url) = &self.update_url {
             crate::pairing::validate_origin(url)
                 .map_err(|_| setting("update-url must be an exact https:// origin"))?;
+        }
+        if let Some(interval) = &self.update_check {
+            crate::update::check_interval(Some(interval)).map_err(|e| {
+                Error::new("CONFIG_INVALID", format!("update-check: {}", e.message))
+            })?;
         }
         if self.direct_port == Some(0) {
             return Err(setting("direct-port is a TCP port from 1 to 65535"));

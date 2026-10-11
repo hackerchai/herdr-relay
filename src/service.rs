@@ -145,6 +145,33 @@ pub async fn run(profile: &Path, origin: &str, remote: Option<crate::relay::Rela
             ),
         }
     }
+    // Keep the update check fresh so the next menu can prompt at once. The
+    // cache limits real checks to the configured interval.
+    let mut updates = tokio::task::JoinSet::new();
+    if let Ok(crate::update::Schedule {
+        interval: Some(interval),
+        site,
+        repository,
+    }) = crate::update::schedule()
+    {
+        let profile = profile.to_owned();
+        updates.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            loop {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    crate::update::refresh_if_due(
+                        &profile,
+                        interval,
+                        site.as_deref(),
+                        repository.as_deref(),
+                    ),
+                )
+                .await;
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
+    }
     let mut monitor = tokio::time::interval(std::time::Duration::from_millis(500));
     monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut outcome = Ok(());
@@ -193,6 +220,7 @@ pub async fn run(profile: &Path, origin: &str, remote: Option<crate::relay::Rela
         }
     }
     crate::direct::advertise(None);
+    updates.shutdown().await;
     direct.shutdown().await;
     tasks.shutdown().await;
     synchronization.shutdown().await;

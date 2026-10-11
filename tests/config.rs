@@ -27,6 +27,7 @@ fn settings_round_trip_through_a_private_file() {
     config
         .set("update-url", "https://mirror.example.org", None)
         .unwrap();
+    config.set("update-check", "6h", None).unwrap();
     config.set("direct", "off", None).unwrap();
     config.set("direct-port", "47999", None).unwrap();
     config.set("token", TOKEN, Some(ORIGIN)).unwrap();
@@ -46,6 +47,7 @@ fn settings_round_trip_through_a_private_file() {
     assert_eq!(loaded, config);
     assert_eq!(loaded.origin.as_deref(), Some(ORIGIN));
     assert_eq!(loaded.direct, Some(false));
+    assert_eq!(loaded.update_check.as_deref(), Some("6h"));
     assert_eq!(
         loaded.update_url.as_deref(),
         Some("https://mirror.example.org")
@@ -79,6 +81,8 @@ fn invalid_settings_are_refused() {
         ("direct-port", "70000"),
         ("update-repository", "not a repository"),
         ("update-url", "http://mirror.example.org"),
+        ("update-check", "5m"),
+        ("update-check", "sometimes"),
         ("update-url", "https://mirror.example.org/path"),
         ("colour", "blue"),
     ] {

@@ -5,6 +5,7 @@ pub mod control;
 pub mod direct;
 pub mod frame;
 pub mod host;
+pub mod hosts;
 pub mod identity;
 pub mod interactive;
 pub mod names;

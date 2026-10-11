@@ -57,6 +57,12 @@ An active session defers the service update until stop/start; add
 `--restart-service` to explicitly restart immediately. The default public channel
 needs no GitHub login. An explicit `--repository OWNER/REPO` can select another
 channel; private alternatives use the caller's own `gh auth login` or `GH_TOKEN`.
+Relay also checks automatically, by default once a day: when a menu opens and
+from the background service. The result is cached in the profile
+(`update-check.json`) and shown as a one-line prompt in the menus and after they
+close; nothing is installed without running `herdr-relay update`. Set the
+interval with `update-check` (`config.toml`) or `HERDR_RELAY_UPDATE_CHECK`, for
+example `6h`, `2d` or `off`; the minimum is one hour.
 An explicit repository skips the download site. `--download-url`,
 `HERDR_RELAY_UPDATE_URL` or `config set update-url` select another download
 site (an exact `https://` origin with the same layout).
