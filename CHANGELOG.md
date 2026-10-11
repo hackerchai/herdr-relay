@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/hackerchai/herdr-relay/compare/v0.2.4...v0.2.5) (2026-10-11)
+
+
+### Features
+
+* monthly Workers Paid budget, optional self-hosted relay token and config.toml ([#51](https://github.com/hackerchai/herdr-relay/issues/51)) ([079a574](https://github.com/hackerchai/herdr-relay/commit/079a57443520937e09ee4cb69a0670ce901963b6))
+
 ## [0.2.4](https://github.com/hackerchai/herdr-relay/compare/v0.2.3...v0.2.4) (2026-10-10)
 
 
