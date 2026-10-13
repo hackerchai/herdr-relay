@@ -103,7 +103,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Action {
-    /// Update from the latest complete stable GitHub Release.
+    /// Update to the latest stable release (download site, then GitHub Releases).
     #[command(display_order = 40)]
     Update {
         /// Report the available version without installing it.
@@ -265,8 +265,9 @@ enum HostsAction {
 enum ConfigAction {
     /// Show the configuration file and its settings; tokens stay hidden.
     Show,
-    /// Save a setting: origin, profile, herdr, update-repository, direct (on/off),
-    /// direct-port or token. Omit a token's value to enter it hidden.
+    /// Save a setting: origin, profile, herdr, update-check, update-url,
+    /// update-repository, direct (on/off), direct-port or token. Omit a token's
+    /// value to enter it hidden.
     Set {
         key: String,
         value: Option<String>,

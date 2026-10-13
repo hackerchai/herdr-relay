@@ -62,7 +62,9 @@ direct-port = 47121
 
 You can also edit `config.toml` directly. Unknown keys and invalid values are
 rejected with a `CONFIG_INVALID` error naming the file, and every command
-refuses to run until it is fixed, so a typo cannot be silently ignored.
+refuses to run until it is fixed, so a typo cannot be silently ignored. This
+includes the `config` commands, so correct the file in an editor, or point
+`HERDR_RELAY_CONFIG` at another file in the meantime.
 
 ## Settings
 
@@ -73,7 +75,7 @@ refuses to run until it is fixed, so a typo cannot be silently ignored.
 | `herdr` | `HERDR_RELAY_HERDR` | `herdr` | The Herdr executable |
 | `update-check` | `HERDR_RELAY_UPDATE_CHECK` | `1d` | How often to check for updates, or `off` |
 | `update-url` | `HERDR_RELAY_UPDATE_URL` | `https://herdr-relay-dl.hackerchai.com` | The release download site tried first |
-| `update-repository` | `HERDR_RELAY_UPDATE_REPOSITORY` | `hackerchai/herdr-relay` | GitHub owner/repository for releases |
+| `update-repository` | `HERDR_RELAY_UPDATE_REPOSITORY` | download site, then `hackerchai/herdr-relay` | GitHub owner/repository for releases |
 | `direct` | `HERDR_RELAY_DIRECT` | `on` | Whether a host accepts direct LAN connections |
 | `direct-port` | `HERDR_RELAY_DIRECT_PORT` | `47120` | The TCP port for direct connections |
 | `token` | `HERDR_RELAY_TOKEN` | none | A self-hosted Relay's access token, saved per origin |
@@ -98,7 +100,9 @@ directories.
 
 The Herdr executable used to open sessions. Set an absolute path when Herdr is
 not on the `PATH` of every shell you use, for example
-`/opt/homebrew/bin/herdr` or `~/.cargo/bin/herdr`.
+`/opt/homebrew/bin/herdr`. Paths in `config.toml` are used as written: `~` and
+variables are not expanded, so write the full path, such as
+`/home/you/.cargo/bin/herdr`. The same applies to `profile`.
 
 ### `update-check`
 
@@ -113,7 +117,8 @@ hour), such as `6h` or `2d`, or `off` to stop checking. See
 Where `herdr-relay update` downloads releases. The download site, an exact
 `https://` origin with the same layout as the default one, is tried before
 GitHub Releases. A GitHub `owner/repository` selects another release channel,
-such as a fork, and skips the download site. Most users never change these.
+such as a fork. Setting `update-repository`, even to the default, uses only
+GitHub Releases and skips the download site. Most users never change these.
 
 ### `direct` and `direct-port`
 
