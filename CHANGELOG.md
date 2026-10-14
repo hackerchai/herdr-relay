@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7](https://github.com/hackerchai/herdr-relay/compare/v0.2.6...v0.2.7) (2026-10-14)
+
+
+### Bug Fixes
+
+* **client:** accept compatible Herdr releases ([6ac7df5](https://github.com/hackerchai/herdr-relay/commit/6ac7df53f98a8fe1a7dd040b015c4eb13974a49f))
+
 ## [0.2.6](https://github.com/hackerchai/herdr-relay/compare/v0.2.5...v0.2.6) (2026-10-11)
 
 
