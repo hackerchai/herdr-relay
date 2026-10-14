@@ -1,6 +1,11 @@
 use herdr_relay::client::check_version;
 use std::{os::unix::fs::PermissionsExt, path::Path};
 
+// A concurrent fork can briefly inherit a writable fixture descriptor until
+// exec, making Linux reject the script with ETXTBSY. Keep fixture writes and
+// subprocess creation in these tests from overlapping.
+static EXECUTABLE_FIXTURES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn executable(path: &Path, script: &str) {
     std::fs::write(path, format!("#!/bin/sh\n{script}\n")).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -8,6 +13,7 @@ fn executable(path: &Path, script: &str) {
 
 #[tokio::test]
 async fn native_releases_are_not_rejected_by_their_version_number() {
+    let _fixtures = EXECUTABLE_FIXTURES.lock().await;
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("herdr");
     for banner in [
@@ -33,6 +39,7 @@ async fn native_releases_are_not_rejected_by_their_version_number() {
 
 #[tokio::test]
 async fn invalid_or_failed_executables_still_fail_preflight() {
+    let _fixtures = EXECUTABLE_FIXTURES.lock().await;
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("herdr");
     for script in [
@@ -61,6 +68,7 @@ async fn invalid_or_failed_executables_still_fail_preflight() {
 
 #[tokio::test]
 async fn a_stuck_version_command_is_bounded() {
+    let _fixtures = EXECUTABLE_FIXTURES.lock().await;
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("herdr");
     executable(&binary, "exec sleep 30");
