@@ -1,7 +1,9 @@
 # Herdr Relay: first connection
 
-Install Herdr and Herdr Relay on both computers. Herdr 0.9.3 is the supported
-native client. The source installation below requires Rust 1.99 or newer:
+Install Herdr and Herdr Relay on both computers. Relay does not pin a Herdr
+release; the native client and server negotiate compatibility. See
+[Herdr compatibility](herdr-compatibility.md). The source installation below
+requires Rust 1.99 or newer:
 
 ```sh
 curl -fsSL https://herdr.dev/install.sh | sh
@@ -64,6 +66,10 @@ distinct aliases. Press `a` in the host menu to assign a clearer local name, or
 `herdr-relay hosts remove NAME` do the same from scripts. Removing is local:
 pairing again needs a new link, and the host can revoke this device with
 `herdr-relay peers revoke`. No device ID, target ID, or `--profile` is required.
+
+Offline, checking and access-revoked hosts stay in the host list when you press
+Enter. Press `r` to check again; renaming and removing these hosts still works.
+A host marked `relay token required` can be selected to configure its token.
 
 ## Keyboard help
 

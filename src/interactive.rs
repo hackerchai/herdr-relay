@@ -3,7 +3,7 @@ use crate::{
     identity::Identity,
     names::{self, PairLink},
     targets::{Definition, Locator, Store},
-    tui::{Choice, Screen},
+    tui::{Choice, MenuRow, Screen},
     user_service,
 };
 use crossterm::event::{Event, KeyCode};
@@ -472,9 +472,9 @@ async fn connect_in(
         } else {
             let mut rows: Vec<_> = hosts
                 .iter()
-                .map(|h| format!("{}   checking…", h.alias))
+                .map(|h| MenuRow::new(format!("{}   checking…", h.alias), false))
                 .collect();
-            rows.push("+ Pair another host".into());
+            rows.push(MenuRow::new("+ Pair another host", true));
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let jobs: Vec<_> = hosts
                 .iter()
@@ -485,19 +485,25 @@ async fn connect_in(
             tasks.spawn(async move {
                 let mut checks = stream::iter(jobs)
                     .map(|(index, host, relay)| async move {
-                        let status = match tokio::time::timeout(
+                        let (status, enabled) = match tokio::time::timeout(
                             Duration::from_secs(6),
                             relay.targets(&host.identity),
                         )
                         .await
                         {
-                            Ok(Ok(_)) => host_status("online", relay.route(&host.identity)),
-                            Ok(Err(e)) if e.code == "NOT_AUTHORIZED" => "access revoked".into(),
-                            Ok(Err(e)) if needs_token(&e) => "relay token required".into(),
-                            _ => "offline / unavailable".into(),
+                            Ok(Ok(_)) => (host_status("online", relay.route(&host.identity)), true),
+                            Ok(Err(e)) if e.code == "NOT_AUTHORIZED" => {
+                                ("access revoked".into(), false)
+                            }
+                            // Keep the token-repair flow reachable from this row.
+                            Ok(Err(e)) if needs_token(&e) => ("relay token required".into(), true),
+                            _ => ("offline / unavailable".into(), false),
                         };
                         // A refreshed hostname takes effect on the next menu load.
-                        (index, format!("{}   {status}", host.alias))
+                        (
+                            index,
+                            MenuRow::new(format!("{}   {status}", host.alias), enabled),
+                        )
                     })
                     .buffer_unordered(4);
                 while let Some(update) = checks.next().await {
@@ -511,7 +517,7 @@ async fn connect_in(
                     "Choose a host",
                     &rows,
                     &format!(
-                        "Select a host to browse its shared Herdr sessions. Aliases are saved locally.{}",
+                        "Enter opens online hosts. Checking, offline and revoked hosts cannot be opened; r refreshes. Aliases are saved locally.{}",
                         update_line(profile)
                     ),
                     true,

@@ -32,7 +32,11 @@ fn command(binary: &Path) -> Command {
     command
 }
 
+/// Check that the configured executable identifies itself as Herdr. Release
+/// numbers are not a wire-compatibility contract: the native client and server
+/// negotiate endpoint generations/codecs over the unchanged byte stream.
 pub async fn check_version(binary: &Path) -> Result<()> {
+    const MAX_VERSION_OUTPUT: usize = 1024;
     let mut child = command(binary)
         .arg("--version")
         .stdin(Stdio::null())
@@ -41,23 +45,30 @@ pub async fn check_version(binary: &Path) -> Result<()> {
         .spawn()
         .map_err(|e| Error::new("CLIENT_START_FAILED", e.to_string()))?;
     let mut output = Vec::new();
-    let mut stdout = child.stdout.take().unwrap().take(128);
+    let mut stdout = child
+        .stdout
+        .take()
+        .unwrap()
+        .take((MAX_VERSION_OUTPUT + 1) as u64);
     let result = timeout(Duration::from_secs(3), async {
         stdout.read_to_end(&mut output).await?;
+        if output.len() > MAX_VERSION_OUTPUT {
+            child.kill().await?;
+        }
         child.wait().await
     })
     .await;
     match result {
         Ok(Ok(status))
             if status.success()
-                && (output == b"herdr 0.9.3\n"
-                    || output == b"herdr 0.9.3-custom.relay-control-bound-1\n") =>
+                && output.len() <= MAX_VERSION_OUTPUT
+                && is_herdr_version(&output) =>
         {
             Ok(())
         }
         Ok(Ok(_)) => Err(Error::new(
             "INCOMPATIBLE_HERDR",
-            "use Herdr 0.9.3 or the relay-control-bound-1 build",
+            "expected a Herdr executable whose --version succeeds and prints 'herdr <version>'; check PATH or select it with --herdr /path/to/herdr",
         )),
         Ok(Err(e)) => Err(Error::new("CLIENT_START_FAILED", e.to_string())),
         Err(_) => {
@@ -68,6 +79,17 @@ pub async fn check_version(binary: &Path) -> Result<()> {
             ))
         }
     }
+}
+
+fn is_herdr_version(output: &[u8]) -> bool {
+    let Ok(output) = std::str::from_utf8(output) else {
+        return false;
+    };
+    let mut words = output.split_whitespace();
+    words.next() == Some("herdr")
+        && words
+            .next()
+            .is_some_and(|version| semver::Version::parse(version).is_ok())
 }
 
 /// Run one foreground native client. This function never launches a server.

@@ -9,9 +9,11 @@ cargo install herdr-relay --locked
 ```
 
 Binary archives contain a native CLI, installer, checksums and these instructions.
-Binary installation needs neither Rust nor Node. The native Herdr **0.9.3** client and an already running target
+Binary installation needs neither Rust nor Node. A native Herdr client and an already running target
 Herdr session are required separately; Relay never installs or launches a server.
-Use `--herdr /absolute/path/to/herdr-0.9.3` when connecting. For a bounded server,
+Use `--herdr /absolute/path/to/herdr` when connecting. Herdr releases are not
+allowlisted: the native endpoints negotiate their protocol. See
+[Herdr compatibility](herdr-compatibility.md). For a bounded 0.9.3 server,
 use the [custom Herdr build](../patches/herdr/README.md), which remains compatible
 with official 0.9.3 clients. Installing Relay does not retrofit existing servers.
 

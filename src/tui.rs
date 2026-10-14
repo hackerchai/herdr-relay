@@ -28,6 +28,23 @@ pub enum Choice {
     Rename(usize),
     Delete(usize),
 }
+
+/// Availability belongs to the row so a live status update also controls Enter.
+/// Disabled rows can still be focused, renamed, and removed.
+#[derive(Clone)]
+pub struct MenuRow {
+    pub label: String,
+    pub enabled: bool,
+}
+
+impl MenuRow {
+    pub fn new(label: impl Into<String>, enabled: bool) -> Self {
+        Self {
+            label: label.into(),
+            enabled,
+        }
+    }
+}
 pub struct Screen {
     terminal: DefaultTerminal,
     interrupt: tokio::signal::unix::Signal,
@@ -222,15 +239,16 @@ impl Screen {
         detail: &str,
         aliases: bool,
     ) -> Result<Choice> {
-        self.choose_live(title, rows, detail, aliases, None).await
+        let rows: Vec<_> = rows.iter().map(|row| MenuRow::new(row, true)).collect();
+        self.choose_live(title, &rows, detail, aliases, None).await
     }
     pub async fn choose_live(
         &mut self,
         title: &str,
-        rows: &[String],
+        rows: &[MenuRow],
         detail: &str,
         aliases: bool,
-        mut updates: Option<&mut tokio::sync::mpsc::UnboundedReceiver<(usize, String)>>,
+        mut updates: Option<&mut tokio::sync::mpsc::UnboundedReceiver<(usize, MenuRow)>>,
     ) -> Result<Choice> {
         let mut rows = rows.to_vec();
         let mut selected: usize = 0;
@@ -240,11 +258,11 @@ impl Screen {
             let indices: Vec<_> = rows
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| s.to_lowercase().contains(&filter.to_lowercase()))
+                .filter(|(_, row)| row.label.to_lowercase().contains(&filter.to_lowercase()))
                 .map(|(i, _)| i)
                 .collect();
             selected = selected.min(indices.len().saturating_sub(1));
-            let filtered: Vec<_> = indices.iter().map(|i| rows[*i].clone()).collect();
+            let filtered: Vec<_> = indices.iter().map(|i| rows[*i].label.clone()).collect();
             self.render(
                 title,
                 &filtered,
@@ -299,7 +317,7 @@ impl Screen {
                     KeyCode::Char('d') | KeyCode::Delete if aliases && !indices.is_empty() => {
                         return Ok(Choice::Delete(indices[selected]));
                     }
-                    KeyCode::Enter if !indices.is_empty() => {
+                    KeyCode::Enter if !indices.is_empty() && rows[indices[selected]].enabled => {
                         return Ok(Choice::Pick(indices[selected]));
                     }
                     KeyCode::Char('?') | KeyCode::F(1) => self.help(detail).await?,

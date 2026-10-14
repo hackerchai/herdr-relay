@@ -98,7 +98,8 @@ service afterwards.
 
 ## Pair and operate from empty profiles
 
-Install verified native CLI candidates and official Herdr 0.9.3 on both devices.
+Install verified native CLI candidates and Herdr on both devices. See
+[Herdr compatibility](herdr-compatibility.md) for native version requirements.
 Start the desired Herdr session yourself. On publisher A:
 
 ```sh

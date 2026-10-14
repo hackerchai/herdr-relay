@@ -93,6 +93,14 @@ setup; an idle timeout does not trigger automatic request replay.
 
 ## Native attachment and stream transition
 
+Native Herdr release numbers are not Relay admission requirements. The local
+preflight checks that the configured executable identifies itself as Herdr and
+can run `--version`; it does not maintain a release allowlist. Herdr's native
+client and server negotiate endpoint generations and codecs over the opaque
+stream. Native rejection diagnostics remain owned by Herdr, and Relay never
+rewrites the hello or downgrades a rejected handshake. See the
+[compatibility guide](../docs/herdr-compatibility.md).
+
 Inner control messages use a big-endian `u32` length followed by UTF-8 JSON, with
 at most 8 KiB per message. The schema must reject duplicate keys, invalid field
 types and messages disallowed in the current state. An attach channel follows

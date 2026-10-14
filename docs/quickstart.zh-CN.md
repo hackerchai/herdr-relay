@@ -5,8 +5,9 @@
 
 ## 1. 两端安装
 
-两台电脑都安装 [Herdr 0.9.3](https://github.com/herdrdev/herdr/releases/tag/v0.9.3)
-和 Herdr Relay。
+两台电脑都安装 [Herdr](https://github.com/herdrdev/herdr/releases/latest)
+和 Herdr Relay。Relay 不锁定 Herdr 的发布版本，由两端的原生协议协商兼容性；
+已验证 0.9.3 与 0.9.4 的交叉连接，详见[版本兼容说明](herdr-compatibility.md)。
 
 从 [GitHub Releases](https://github.com/hackerchai/herdr-relay/releases/latest)（国内建议用[下载站](install.md#download-site)）
 下载对应系统和架构的压缩包，核对校验和、解压后运行 `./install.sh`。
@@ -75,6 +76,9 @@ herdr-relay
 按 `d` 删除不再使用的主机（也可以用 `herdr-relay hosts list` / `herdr-relay hosts remove 名称`）。
 主机默认以电脑名命名（macOS 上是"共享"设置里的电脑名）。删除只在本机生效：
 重新访问需要新的配对链接，主机端可用 `herdr-relay peers revoke` 撤销本设备。
+
+主机显示离线、检查中或访问已撤销时，按 Enter 会留在主机列表；按 `r` 重新检查。
+这些主机仍可重命名和删除。显示 `relay token required` 时，可以选择主机来补填 token。
 
 在 Herdr 内按 **Ctrl-B，松开，再按 Q**，返回 Relay 菜单。
 远端会话和 agent 继续运行。同一个会话同时只允许一个 Relay 客户端；

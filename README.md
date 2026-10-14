@@ -11,7 +11,9 @@ shared sessions, and background sharing with automatic reconnect.
 ## Install
 
 Install [Herdr latest](https://github.com/herdrdev/herdr/releases/latest) on both
-computers. Herdr Relay has been tested with Herdr 0.9.3.
+computers. Herdr Relay supports compatible native Herdr clients without pinning
+a release number; 0.9.3 and 0.9.4 have been tested together. See
+[Herdr compatibility](docs/herdr-compatibility.md).
 
 Get Herdr Relay from the
 [GitHub Releases](https://github.com/hackerchai/herdr-relay/releases/latest) (or the faster

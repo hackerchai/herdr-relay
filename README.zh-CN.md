@@ -10,7 +10,8 @@
 ## 安装
 
 在两台电脑上安装 [Herdr 最新版](https://github.com/herdrdev/herdr/releases/latest)。
-Herdr Relay 已在 Herdr 0.9.3 上通过测试。
+Herdr Relay 不锁定 Herdr 版本号，由原生客户端和服务端协商协议兼容性；
+已验证 0.9.3 与 0.9.4 之间的交叉连接。详见[版本兼容说明](docs/herdr-compatibility.md)。
 
 从 [GitHub Releases](https://github.com/hackerchai/herdr-relay/releases/latest) 下载 Herdr Relay（国内可用更快的[下载站](docs/install.md#download-site)），
 或使用 Rust 1.99 及更新版本安装：

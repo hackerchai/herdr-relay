@@ -230,7 +230,7 @@ enum Action {
         #[command(subcommand)]
         action: IdentityAction,
     },
-    /// Connect an official Herdr 0.9.3 client through a local byte-stream bridge.
+    /// Connect a native Herdr client through a local byte-stream bridge.
     #[command(hide = true)]
     Local {
         #[arg(long, required_unless_present = "socket", conflicts_with = "socket")]
