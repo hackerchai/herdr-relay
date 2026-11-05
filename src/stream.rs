@@ -233,7 +233,11 @@ where
                         consumed = *consumed_rx.borrow_and_update();
                         receive_progress = tokio::time::Instant::now();
                     },
-                    message = socket.next() => {
+                    // This pump is the queue's only sender. Wait for the writer's
+                    // consumption notification before reading more frames when
+                    // it is full; a valid burst is backpressure, not a protocol
+                    // violation. Cancellation and progress deadlines stay live.
+                    message = socket.next(), if incoming.capacity() > 0 => {
                         last_seen = tokio::time::Instant::now();
                         match message.ok_or_else(protocol)?.map_err(|_| protocol())? {
                             Message::Binary(bytes) => {

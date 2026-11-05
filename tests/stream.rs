@@ -1,6 +1,117 @@
-use herdr_relay::stream::websocket_stream;
+use herdr_relay::stream::{Limits, Stream, websocket_stream, websocket_stream_with_limits};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+
+#[tokio::test]
+async fn a_batched_burst_of_small_frames_does_not_disconnect_a_healthy_reader() {
+    for limits in [Limits::default(), v2()] {
+        for (count, size) in [(64, 1), (65, 1), (128, 64), (300, 64), (128, 512)] {
+            let (mut stream, _peer) = buffered_burst(count, size, limits).await;
+            let mut received = vec![0; count * size];
+            tokio::time::timeout(Duration::from_secs(1), stream.read_exact(&mut received))
+                .await
+                .expect("a healthy reader must keep making progress")
+                .unwrap_or_else(|error| {
+                    panic!("{count} valid batched frames disconnected the stream: {error}")
+                });
+            assert!(received.iter().all(|&byte| byte == 0x42));
+        }
+    }
+}
+
+async fn buffered_burst(
+    count: usize,
+    size: usize,
+    limits: Limits,
+) -> (Stream, WebSocketStream<tokio::io::DuplexStream>) {
+    use futures_util::SinkExt;
+    use herdr_relay::frame::{Frame, Kind};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // A network read may deliver many small screen updates together. These
+    // frames fit both the advertised byte window and the 300-message burst.
+    let (a, b) = tokio::io::duplex(1024 * 1024);
+    let a = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
+    let mut peer = WebSocketStream::from_raw_socket(b, Role::Server, None).await;
+    let channel = [8; 16];
+    let payload = vec![0x42; size];
+    for offset in (0..count * payload.len()).step_by(payload.len()) {
+        let bytes = Frame {
+            kind: Kind::Data,
+            channel,
+            offset: offset as u64,
+            payload: &payload,
+        }
+        .encode()
+        .unwrap();
+        peer.feed(Message::Binary(bytes.into())).await.unwrap();
+    }
+    peer.flush().await.unwrap();
+    (
+        websocket_stream_with_limits(a, &channel, limits).unwrap(),
+        peer,
+    )
+}
+
+// Read until close, answering heartbeats while the native consumer is paused.
+async fn peer_closed(peer: &mut WebSocketStream<tokio::io::DuplexStream>) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        match peer.next().await {
+            Some(Ok(Message::Ping(_))) => peer.flush().await.unwrap(),
+            Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_full_receive_queue_recovers_after_a_short_consumer_pause() {
+    let (mut stream, mut peer) = buffered_burst(128, 512, Limits::default()).await;
+    // 64 KiB fills the 16 KiB endpoint buffer and the 64-frame receive queue.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), peer_closed(&mut peer))
+            .await
+            .is_err()
+    );
+    let mut received = vec![0; 65536];
+    tokio::time::timeout(Duration::from_secs(1), stream.read_exact(&mut received))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(received.iter().all(|&byte| byte == 0x42));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_full_receive_queue_still_expires_when_consumption_stalls() {
+    let (_stream, mut peer) = buffered_burst(128, 512, Limits::default()).await;
+    let began = tokio::time::Instant::now();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), peer_closed(&mut peer))
+            .await
+            .is_err()
+    );
+    tokio::time::timeout(Duration::from_secs(30), peer_closed(&mut peer))
+        .await
+        .expect("a full queue must not bypass the consumption deadline");
+    assert!(began.elapsed() >= Duration::from_secs(30));
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_a_full_receive_queue_closes_without_waiting_for_consumption() {
+    let (stream, mut peer) = buffered_burst(128, 512, Limits::default()).await;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), peer_closed(&mut peer))
+            .await
+            .is_err()
+    );
+    drop(stream);
+    tokio::time::timeout(Duration::from_secs(1), peer_closed(&mut peer))
+        .await
+        .expect("a full receive queue must remain cancellable");
+}
 
 #[tokio::test]
 async fn credit_window_carries_simultaneous_large_streams_through_slow_readers() {
