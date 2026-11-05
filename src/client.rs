@@ -213,8 +213,9 @@ pub async fn connect_remote(
                 };
                 delay = next;
                 eprintln!(
-                    "Disconnected ({}). Retrying in {:.1}s; Ctrl-C cancels. Offline input is discarded.",
+                    "Disconnected ({}: {}). Retrying in {:.1}s; Ctrl-C cancels. Offline input is discarded.",
                     error.code,
+                    crate::names::display(&error.message),
                     delay.as_secs_f64()
                 );
             }

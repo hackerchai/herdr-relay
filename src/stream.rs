@@ -62,18 +62,20 @@ struct Budget {
     credits: Option<f64>,
     byte_rate: f64,
     message_rate: f64,
+    message_burst: f64,
     burst: f64,
     updated: tokio::time::Instant,
 }
 impl Budget {
-    fn new(limits: Limits, pace: f64) -> Self {
+    fn new(limits: Limits, pace: f64, message_burst: f64) -> Self {
         let burst = (limits.bytes_per_second as f64 * 2.0).max(limits.window() as f64);
         Self {
             bytes: burst,
-            messages: 300.0,
-            credits: limits.window.map(|_| 300.0),
+            messages: message_burst,
+            credits: limits.window.map(|_| message_burst),
             byte_rate: limits.bytes_per_second as f64 * pace,
             message_rate: 150.0 * pace,
+            message_burst,
             burst,
             updated: tokio::time::Instant::now(),
         }
@@ -83,9 +85,9 @@ impl Budget {
         let elapsed = (now - self.updated).as_secs_f64();
         self.updated = now;
         self.bytes = (self.bytes + elapsed * self.byte_rate).min(self.burst);
-        self.messages = (self.messages + elapsed * self.message_rate).min(300.0);
+        self.messages = (self.messages + elapsed * self.message_rate).min(self.message_burst);
         if let Some(credits) = &mut self.credits {
-            *credits = (*credits + elapsed * self.message_rate).min(300.0);
+            *credits = (*credits + elapsed * self.message_rate).min(self.message_burst);
         }
     }
     fn credit_messages(&self) -> f64 {
@@ -160,6 +162,7 @@ where
     let channel = *channel;
     let (client, bridge) = tokio::io::duplex(16384);
     let (cancel, mut cancelled) = tokio::sync::oneshot::channel();
+    let (failure_tx, failure) = tokio::sync::watch::channel(None);
     tokio::spawn(async move {
         let (mut reader, mut writer) = tokio::io::split(bridge);
         let (incoming, mut queued) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
@@ -179,11 +182,14 @@ where
         let pump = async {
             let (mut sent, mut ack, mut received, mut credited, mut consumed) =
                 (0u64, 0u64, 0u64, 0u64, 0u64);
-            // A small pacing margin tolerates network batching and clock
-            // differences while the cloud still enforces the advertised cap.
+            // Leave one second of message headroom for network batching. A
+            // slower refill alone cannot help when both ends start with the
+            // same full burst: 300 messages plus the first refilled token can
+            // arrive together and exceed the relay's 300-message allowance.
+            // Keep the byte window and sustained rate unchanged.
             let window = limits.window();
-            let mut outgoing = Budget::new(limits, 0.95);
-            let mut incoming_budget = Budget::new(limits, 1.0);
+            let mut outgoing = Budget::new(limits, 0.95, 150.0);
+            let mut incoming_budget = Budget::new(limits, 1.0, 300.0);
             let mut bytes = [0; 16384];
             let mut ping = tokio::time::interval(Duration::from_secs(25));
             let mut last_seen = tokio::time::Instant::now();
@@ -205,9 +211,9 @@ where
                 tokio::select! {
                     biased;
                     _ = &mut cancelled => return Ok(()),
-                    _ = tokio::time::sleep_until(last_seen + Duration::from_secs(75)) => return Err(protocol()),
-                    _ = tokio::time::sleep_until(send_progress + Duration::from_secs(30)), if sent > ack => return Err(protocol()),
-                    _ = tokio::time::sleep_until(receive_progress + Duration::from_secs(30)), if received > consumed => return Err(protocol()),
+                    _ = tokio::time::sleep_until(last_seen + Duration::from_secs(75)) => return Err(lost("relay heartbeat timed out after 75 seconds")),
+                    _ = tokio::time::sleep_until(send_progress + Duration::from_secs(30)), if sent > ack => return Err(lost("relay peer did not acknowledge data for 30 seconds")),
+                    _ = tokio::time::sleep_until(receive_progress + Duration::from_secs(30)), if received > consumed => return Err(lost("local consumer stalled for 30 seconds")),
                     _ = tokio::time::sleep_until(budget_deadline), if (pending > 0 && !can_data) || (consumed>credited && !can_credit) => {},
                     _ = async {}, if consumed>credited && can_credit => {
                         outgoing.take_credit()?;
@@ -239,10 +245,11 @@ where
                     // violation. Cancellation and progress deadlines stay live.
                     message = socket.next(), if incoming.capacity() > 0 => {
                         last_seen = tokio::time::Instant::now();
-                        match message.ok_or_else(protocol)?.map_err(|_| protocol())? {
+                        match message.ok_or_else(|| lost("relay WebSocket ended without a close frame"))?.map_err(socket_error)? {
                             Message::Binary(bytes) => {
                                 let frame = Frame::decode(&bytes)?;
-                                incoming_budget.take_frame(frame.kind, frame.payload.len())?;
+                                incoming_budget.take_frame(frame.kind, frame.payload.len())
+                                    .map_err(|_| lost("received frames exceeded the relay stream rate limit"))?;
                                 if frame.channel != channel { return Err(protocol()); }
                                 match frame.kind {
                                     Kind::Data => {
@@ -259,8 +266,9 @@ where
                                     }
                                 }
                             },
-                            Message::Ping(_) => { tokio::time::timeout(Duration::from_secs(10),socket.flush()).await.map_err(|_| protocol())?.map_err(|_| protocol())?; },
+                            Message::Ping(_) => { tokio::time::timeout(Duration::from_secs(10),socket.flush()).await.map_err(|_| lost("relay WebSocket flush timed out after 10 seconds"))?.map_err(socket_error)?; },
                             Message::Pong(_) => {},
+                            Message::Close(Some(frame)) if u16::from(frame.code) != 1000 => return Err(close_error(u16::from(frame.code), frame.reason.as_str())),
                             _ => return Ok(()),
                         }
                     },
@@ -270,7 +278,12 @@ where
                 }
             }
         };
-        let _: Result<()> = pump.await;
+        let result: Result<()> = pump.await;
+        if let Err(error) = result {
+            // Publish the cause before dropping the bridge. The native/TLS
+            // reader must see the transport failure instead of an anonymous EOF.
+            failure_tx.send_replace(Some(error.message));
+        }
         write_task.abort();
         let _ = write_task.await;
         let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
@@ -278,6 +291,7 @@ where
     Ok(Stream {
         inner: client,
         cancel: Some(cancel),
+        failure,
     })
 }
 async fn send<S: AsyncRead + AsyncWrite + Unpin>(
@@ -286,8 +300,46 @@ async fn send<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(10), socket.send(message))
         .await
-        .map_err(|_| protocol())?
-        .map_err(|_| protocol())
+        .map_err(|_| lost("relay WebSocket send timed out after 10 seconds"))?
+        .map_err(socket_error)
+}
+fn lost(message: impl Into<String>) -> Error {
+    Error::new("CONNECTION_LOST", message)
+}
+fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> Error {
+    use tokio_tungstenite::tungstenite::Error as SocketError;
+    match error {
+        SocketError::Io(error) => lost(format!("relay socket I/O failed: {error}")),
+        SocketError::Tls(_) => lost("relay socket TLS failed"),
+        SocketError::Protocol(_) => lost("relay WebSocket protocol error or unclean close"),
+        _ => lost("relay WebSocket failed"),
+    }
+}
+fn close_error(code: u16, reason: &str) -> Error {
+    // Relay reasons are untrusted text. Keep only known protocol codes; never
+    // echo arbitrary close text (which could contain secrets or terminal escapes).
+    if code == 4000
+        && matches!(
+            reason,
+            "RATE_LIMITED"
+                | "SLOW_CONSUMER"
+                | "HOST_OFFLINE"
+                | "CONNECTION_LOST"
+                | "CHANNEL_EXPIRED"
+                | "GLOBAL_QUOTA_EXCEEDED"
+                | "RELAY_BUSY"
+                | "PROTOCOL_ERROR"
+                | "STATE_CONFLICT"
+                | "PROTOCOL_CHANGED"
+                | "NOT_AUTHORIZED"
+                | "TARGET_NOT_SHARED"
+                | "TARGET_OFFLINE"
+        )
+    {
+        lost(format!("relay closed stream ({reason})"))
+    } else {
+        lost(format!("relay closed stream (WebSocket code {code})"))
+    }
 }
 fn protocol() -> Error {
     Error::new(
@@ -303,6 +355,14 @@ fn io(error: std::io::Error) -> Error {
 pub struct Stream {
     inner: tokio::io::DuplexStream,
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    failure: tokio::sync::watch::Receiver<Option<String>>,
+}
+impl Stream {
+    fn failure(&self) -> Option<std::io::Error> {
+        self.failure.borrow().as_ref().map(|message| {
+            std::io::Error::new(std::io::ErrorKind::ConnectionAborted, message.clone())
+        })
+    }
 }
 impl AsyncRead for Stream {
     fn poll_read(
@@ -310,7 +370,17 @@ impl AsyncRead for Stream {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+        let before = buf.filled().len();
+        let has_capacity = buf.remaining() > 0;
+        match std::pin::Pin::new(&mut self.inner).poll_read(cx, buf) {
+            std::task::Poll::Ready(Ok(())) if has_capacity && buf.filled().len() == before => {
+                std::task::Poll::Ready(self.failure().map_or(Ok(()), Err))
+            }
+            std::task::Poll::Ready(Err(error)) => {
+                std::task::Poll::Ready(Err(self.failure().unwrap_or(error)))
+            }
+            result => result,
+        }
     }
 }
 impl AsyncWrite for Stream {
@@ -319,13 +389,17 @@ impl AsyncWrite for Stream {
         cx: &mut std::task::Context<'_>,
         bytes: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.inner).poll_write(cx, bytes)
+        std::pin::Pin::new(&mut self.inner)
+            .poll_write(cx, bytes)
+            .map_err(|error| self.failure().unwrap_or(error))
     }
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+        std::pin::Pin::new(&mut self.inner)
+            .poll_flush(cx)
+            .map_err(|error| self.failure().unwrap_or(error))
     }
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
