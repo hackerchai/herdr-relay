@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.8](https://github.com/hackerchai/herdr-relay/compare/v0.2.7...v0.2.8) (2026-11-05)
+
+
+### Bug Fixes
+
+* **stream:** avoid disconnects on receive bursts ([ae71b54](https://github.com/hackerchai/herdr-relay/commit/ae71b54de44b7c78812f855fc29c1debe31cc5e0))
+
 ## [0.2.7](https://github.com/hackerchai/herdr-relay/compare/v0.2.6...v0.2.7) (2026-10-14)
 
 
